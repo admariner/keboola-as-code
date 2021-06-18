@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"github.com/spf13/cobra"
 	"keboola-as-code/src/diff"
 )
@@ -40,19 +41,25 @@ func pullCommand(root *rootCommand) *cobra.Command {
 			}
 
 			// Load project remote and local state
-			differ := diff.NewDiffer(root.ctx, a, root.logger, root.options.ProjectDir(), root.options.MetadataDir())
+			differ := diff.NewDiffer(root.options.ProjectDir(), root.options.MetadataDir(), root.ctx, a, root.logger)
 			if err := differ.LoadState(); err != nil {
 				return err
 			}
 
 			// Diff
-			result, err := differ.Diff()
+			_, err = differ.Diff()
 			if err != nil {
 				return err
 			}
 
+			// Make pull
+			//actions := result.PullActions()
+			//actions.Log(root.logger)
+			//if err := actions.Invoke(root.ctx, root.api, root.logger); err != nil {
+			//	return err
+			//}
 
-			//return result.ApplyPull(root.logger)
+			return fmt.Errorf("TODO PULL")
 		},
 	}
 

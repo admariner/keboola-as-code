@@ -2,6 +2,7 @@ package diff
 
 import (
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 	"keboola-as-code/src/api"
 	"keboola-as-code/src/client"
 )
@@ -19,10 +20,11 @@ const (
 type Result interface {
 	State() ResultState
 	Changes() []string
-	SaveRemote(pool *client.Pool, a *api.StorageApi, logger *zap.SugaredLogger) error
-	DeleteRemote(pool *client.Pool, a *api.StorageApi, logger *zap.SugaredLogger) error
-	DeleteLocal(logger *zap.SugaredLogger) error
-	SaveLocal(logger *zap.SugaredLogger) error
+	LocalPath() string
+	SaveRemote(logger *zap.SugaredLogger, workers *errgroup.Group, pool *client.Pool, a *api.StorageApi) error
+	DeleteRemote(logger *zap.SugaredLogger, workers *errgroup.Group, pool *client.Pool, a *api.StorageApi) error
+	DeleteLocal(logger *zap.SugaredLogger, workers *errgroup.Group) error
+	SaveLocal(logger *zap.SugaredLogger, workers *errgroup.Group) error
 }
 
 type Results struct {
@@ -53,4 +55,16 @@ type ConfigDiff struct {
 type ConfigRowDiff struct {
 	resultData
 	*ConfigRowState
+}
+
+func (b *BranchDiff) LocalPath() string {
+	return b.BranchState.Manifest.RelativePath
+}
+
+func (c *ConfigDiff) LocalPath() string {
+	return c.ConfigState.Manifest.RelativePath
+}
+
+func (r *ConfigRowDiff) LocalPath() string {
+	return r.ConfigRowState.Manifest.RelativePath
 }

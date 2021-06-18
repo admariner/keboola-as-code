@@ -43,13 +43,14 @@ func TestDifferLoadState(t *testing.T) {
 				Description: "Main branch",
 				IsDefault:   true,
 			},
-			Manifest: &model.ManifestBranch{
-				Id:   cast.ToInt(utils.MustGetEnv(`TEST_BRANCH_MAIN_ID`)),
-				Path: "main",
+			Manifest: &model.BranchManifest{
+				Id:           cast.ToInt(utils.MustGetEnv(`TEST_BRANCH_MAIN_ID`)),
+				Path:         "main",
+				RelativePath: "main",
+				MetadataFile: "main/meta.json",
 			},
-			MetadataFile: projectDir + "/main/meta.json",
 		},
-	}, differ.state.BranchesSlice())
+	}, differ.state.Branches())
 	assert.Equal(t, []*model.ConfigState{
 		{
 			BranchId:    cast.ToInt(utils.MustGetEnv(`TEST_BRANCH_MAIN_ID`)),
@@ -81,17 +82,18 @@ func TestDifferLoadState(t *testing.T) {
 				},
 				Rows: []*model.ConfigRow{},
 			},
-			Manifest: &model.ManifestConfig{
-				BranchId:    cast.ToInt(utils.MustGetEnv(`TEST_BRANCH_MAIN_ID`)),
-				ComponentId: "ex-generic-v2",
-				Id:          utils.MustGetEnv(`TEST_BRANCH_ALL_CONFIG_EMPTY_ID`),
-				Path:        "ex-generic-v2/456-todos",
-				Rows:        []*model.ManifestConfigRow{},
+			Manifest: &model.ConfigManifest{
+				BranchId:     cast.ToInt(utils.MustGetEnv(`TEST_BRANCH_MAIN_ID`)),
+				ComponentId:  "ex-generic-v2",
+				Id:           utils.MustGetEnv(`TEST_BRANCH_ALL_CONFIG_EMPTY_ID`),
+				Path:         "ex-generic-v2/456-todos",
+				Rows:         []*model.ConfigRowManifest{},
+				RelativePath: "main/ex-generic-v2/456-todos",
+				MetadataFile: "main/ex-generic-v2/456-todos/meta.json",
+				ConfigFile:   "main/ex-generic-v2/456-todos/config.json",
 			},
-			MetadataFile: projectDir + "/main/ex-generic-v2/456-todos/meta.json",
-			ConfigFile:   projectDir + "/main/ex-generic-v2/456-todos/config.json",
 		},
-	}, differ.state.ConfigsSlice())
+	}, differ.state.Configs())
 }
 
 func initLocalState(t *testing.T, localState string) (string, string) {
@@ -111,5 +113,5 @@ func initLocalState(t *testing.T, localState string) (string, string) {
 func createDiffer(t *testing.T, projectDir, metadataDir string) *Differ {
 	a, _ := api.TestStorageApiWithToken(t)
 	logger, _ := utils.NewDebugLogger()
-	return NewDiffer(context.Background(), a, logger, projectDir, metadataDir)
+	return NewDiffer(projectDir, metadataDir, context.Background(), a, logger)
 }

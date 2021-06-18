@@ -9,8 +9,6 @@ import (
 
 type State struct {
 	mutex        *sync.Mutex
-	projectDir   string
-	metadataDir  string
 	remoteErrors *utils.Error
 	localErrors  *utils.Error
 	paths        *PathsState
@@ -21,11 +19,10 @@ type State struct {
 }
 
 type BranchState struct {
-	Id           int
-	Remote       *Branch
-	Local        *Branch
-	Manifest     *ManifestBranch
-	MetadataFile string
+	Id       int
+	Remote   *Branch
+	Local    *Branch
+	Manifest *BranchManifest
 }
 
 type ComponentState struct {
@@ -35,33 +32,27 @@ type ComponentState struct {
 }
 
 type ConfigState struct {
-	BranchId     int
-	ComponentId  string
-	Id           string
-	Remote       *Config
-	Local        *Config
-	Manifest     *ManifestConfig
-	MetadataFile string
-	ConfigFile   string
+	BranchId    int
+	ComponentId string
+	Id          string
+	Remote      *Config
+	Local       *Config
+	Manifest    *ConfigManifest
 }
 
 type ConfigRowState struct {
-	BranchId     int
-	ComponentId  string
-	ConfigId     string
-	Id           string
-	Remote       *ConfigRow
-	Local        *ConfigRow
-	Manifest     *ManifestConfigRow
-	MetadataFile string
-	ConfigFile   string
+	BranchId    int
+	ComponentId string
+	ConfigId    string
+	Id          string
+	Remote      *ConfigRow
+	Local       *ConfigRow
+	Manifest    *ConfigRowManifest
 }
 
-func NewState(projectDir, metadataDir string) *State {
+func NewState(projectDir string) *State {
 	s := &State{
 		mutex:        &sync.Mutex{},
-		projectDir:   projectDir,
-		metadataDir:  metadataDir,
 		remoteErrors: &utils.Error{},
 		localErrors:  &utils.Error{},
 		branches:     make(map[string]*BranchState),
@@ -71,14 +62,6 @@ func NewState(projectDir, metadataDir string) *State {
 	}
 	s.paths = NewPathsState(projectDir, s.localErrors)
 	return s
-}
-
-func (s *State) ProjectDir() string {
-	return s.projectDir
-}
-
-func (s *State) MetadataDir() string {
-	return s.metadataDir
 }
 
 func (s *State) Validate() *utils.Error {
@@ -92,6 +75,7 @@ func (s *State) MarkPathTracked(path string) {
 func (s *State) TrackedPaths() []string {
 	return s.paths.Tracked()
 }
+
 func (s *State) UntrackedPaths() []string {
 	return s.paths.Untracked()
 }
@@ -112,23 +96,7 @@ func (s *State) AddLocalError(err error) {
 	s.localErrors.Add(err)
 }
 
-func (s *State) Branches() map[string]*BranchState {
-	return s.branches
-}
-
-func (s *State) Components() map[string]*ComponentState {
-	return s.components
-}
-
-func (s *State) Configs() map[string]*ConfigState {
-	return s.configs
-}
-
-func (s *State) ConfigRows() map[string]*ConfigRowState {
-	return s.configRows
-}
-
-func (s *State) BranchesSlice() []*BranchState {
+func (s *State) Branches() []*BranchState {
 	var branches []*BranchState
 	for _, b := range s.branches {
 		branches = append(branches, b)
@@ -139,7 +107,7 @@ func (s *State) BranchesSlice() []*BranchState {
 	return branches
 }
 
-func (s *State) ComponentsSlice() []*ComponentState {
+func (s *State) Components() []*ComponentState {
 	var components []*ComponentState
 	for _, c := range s.components {
 		components = append(components, c)
@@ -150,7 +118,7 @@ func (s *State) ComponentsSlice() []*ComponentState {
 	return components
 }
 
-func (s *State) ConfigsSlice() []*ConfigState {
+func (s *State) Configs() []*ConfigState {
 	var configs []*ConfigState
 	for _, c := range s.configs {
 		configs = append(configs, c)
@@ -161,7 +129,7 @@ func (s *State) ConfigsSlice() []*ConfigState {
 	return configs
 }
 
-func (s *State) ConfigRowsSlice() []*ConfigRowState {
+func (s *State) ConfigRows() []*ConfigRowState {
 	var configRows []*ConfigRowState
 	for _, r := range s.configRows {
 		configRows = append(configRows, r)
@@ -179,14 +147,13 @@ func (s *State) SetBranchRemoteState(branch *Branch) {
 	state.Remote = branch
 }
 
-func (s *State) SetBranchLocalState(branch *Branch, manifest *ManifestBranch, metadataFile string) {
+func (s *State) SetBranchLocalState(branch *Branch, manifest *BranchManifest) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	s.MarkPathTracked(metadataFile)
+	s.MarkPathTracked(manifest.MetadataFile)
 	state := s.getBranchState(branch)
 	state.Local = branch
 	state.Manifest = manifest
-	state.MetadataFile = metadataFile
 }
 
 func (s *State) SetComponentRemoteState(component *Component) {
@@ -204,17 +171,15 @@ func (s *State) SetConfigRemoteState(config *Config) {
 	state.Remote = config
 }
 
-func (s *State) SetConfigLocalState(config *Config, manifest *ManifestConfig, metadataFile, configFile string) {
+func (s *State) SetConfigLocalState(config *Config, manifest *ConfigManifest) {
 	config.SortRows()
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	s.MarkPathTracked(metadataFile)
-	s.MarkPathTracked(configFile)
+	s.MarkPathTracked(manifest.MetadataFile)
+	s.MarkPathTracked(manifest.ConfigFile)
 	state := s.getConfigState(config)
 	state.Local = config
 	state.Manifest = manifest
-	state.MetadataFile = metadataFile
-	state.ConfigFile = configFile
 }
 
 func (s *State) SetConfigRowRemoteState(configRow *ConfigRow) {
@@ -224,11 +189,11 @@ func (s *State) SetConfigRowRemoteState(configRow *ConfigRow) {
 	state.Remote = configRow
 }
 
-func (s *State) SetConfigRowLocalState(configRow *ConfigRow, manifest *ManifestConfigRow, metadataFile, configFile string) {
+func (s *State) SetConfigRowLocalState(configRow *ConfigRow, manifest *ConfigRowManifest) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	s.MarkPathTracked(metadataFile)
-	s.MarkPathTracked(configFile)
+	s.MarkPathTracked(manifest.MetadataFile)
+	s.MarkPathTracked(manifest.ConfigFile)
 	state := s.getConfigRowState(configRow)
 	state.Local = configRow
 	state.Manifest = manifest

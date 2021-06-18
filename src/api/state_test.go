@@ -20,9 +20,8 @@ func TestLoadRemoteStateEmpty(t *testing.T) {
 	SetStateOfTestProject(t, "empty.json")
 
 	projectDir := t.TempDir()
-	metadataDir := filepath.Join(projectDir, ".keboola")
 	a, _ := TestStorageApiWithToken(t)
-	state := model.NewState(projectDir, metadataDir)
+	state := model.NewState(projectDir)
 	err := a.LoadRemoteState(state, context.Background())
 	assert.NotNil(t, state)
 	assert.NotNil(t, err)
@@ -35,15 +34,14 @@ func TestLoadRemoteStateComplex(t *testing.T) {
 	SetStateOfTestProject(t, "complex.json")
 
 	projectDir := t.TempDir()
-	metadataDir := filepath.Join(projectDir, ".keboola")
 	a, _ := TestStorageApiWithToken(t)
-	state := model.NewState(projectDir, metadataDir)
+	state := model.NewState(projectDir)
 	err := a.LoadRemoteState(state, context.Background())
 	assert.NotNil(t, state)
 	assert.NotNil(t, err)
 	assert.Equal(t, 0, err.Len())
-	assert.Equal(t, complexExpectedBranches(), state.BranchesSlice())
-	assert.Equal(t, complexExpectedConfigs(), state.ConfigsSlice())
+	assert.Equal(t, complexExpectedBranches(), state.Branches())
+	assert.Equal(t, complexExpectedConfigs(), state.Configs())
 }
 
 // TestDumpProjectState dumps test project as JSON file
@@ -51,9 +49,8 @@ func TestLoadRemoteStateComplex(t *testing.T) {
 func TestDumpProjectState(t *testing.T) {
 	// Load remote state and convert
 	projectDir := t.TempDir()
-	metadataDir := filepath.Join(projectDir, ".keboola")
 	a, _ := TestStorageApiWithToken(t)
-	state := model.NewState(projectDir, metadataDir)
+	state := model.NewState(projectDir)
 	stateErr := a.LoadRemoteState(state, context.Background())
 	assert.NotNil(t, stateErr)
 	if stateErr.Len() > 0 {

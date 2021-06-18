@@ -19,7 +19,7 @@ func TestStorageApiWithHost(t *testing.T, apiHost string) (*StorageApi, *utils.W
 		logs.ConnectTo(os.Stdout)
 	}
 	a := NewStorageApi(apiHost, context.Background(), logger, false)
-	a.SetRetry(3, 1*time.Millisecond, 1*time.Millisecond)
+	a.SetRetry(3, 100*time.Millisecond, 100*time.Millisecond)
 	return a, logs
 }
 

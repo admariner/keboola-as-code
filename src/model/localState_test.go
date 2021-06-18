@@ -59,8 +59,8 @@ func TestLoadLocalStateComplex(t *testing.T) {
 	assert.NotNil(t, state)
 	assert.NotNil(t, err)
 	assert.Equal(t, 0, err.Len())
-	assert.Equal(t, complexExpectedBranches(state.ProjectDir()), state.BranchesSlice())
-	assert.Equal(t, complexExpectedConfigs(state.ProjectDir()), state.ConfigsSlice())
+	assert.Equal(t, complexExpectedBranches(), state.Branches())
+	assert.Equal(t, complexExpectedConfigs(), state.Configs())
 	assert.Equal(t, []string{
 		"123-branch/keboola.ex-db-mysql/untrackedDir",
 		"123-branch/keboola.ex-db-mysql/untrackedDir/untracked2",
@@ -192,11 +192,11 @@ func loadLocalTestState(t *testing.T, projectDirName string) (*State, *utils.Err
 		t.Fatalf("Copy error: %s", err)
 	}
 	utils.ReplaceEnvsDir(projectDir)
-	state := NewState(projectDir, metadataDir)
-	return state, LoadLocalState(state)
+	state := NewState(projectDir)
+	return state, LoadLocalState(state, projectDir, metadataDir)
 }
 
-func complexExpectedBranches(projectDir string) []*BranchState {
+func complexExpectedBranches() []*BranchState {
 	return []*BranchState{
 		{
 			Id: 111,
@@ -206,11 +206,12 @@ func complexExpectedBranches(projectDir string) []*BranchState {
 				Description: "Main branch",
 				IsDefault:   true,
 			},
-			Manifest: &ManifestBranch{
-				Path: "main",
-				Id:   111,
+			Manifest: &BranchManifest{
+				Path:         "main",
+				Id:           111,
+				RelativePath: "main",
+				MetadataFile: "main/meta.json",
 			},
-			MetadataFile: projectDir + "/main/meta.json",
 		},
 		{
 			Id: 123,
@@ -220,16 +221,17 @@ func complexExpectedBranches(projectDir string) []*BranchState {
 				Description: "My branch",
 				IsDefault:   false,
 			},
-			Manifest: &ManifestBranch{
-				Path: "123-branch",
-				Id:   123,
+			Manifest: &BranchManifest{
+				Path:         "123-branch",
+				Id:           123,
+				RelativePath: "123-branch",
+				MetadataFile: "123-branch/meta.json",
 			},
-			MetadataFile: projectDir + "/123-branch/meta.json",
 		},
 	}
 }
 
-func complexExpectedConfigs(projectDir string) []*ConfigState {
+func complexExpectedConfigs() []*ConfigState {
 	return []*ConfigState{
 		{
 			BranchId:    111,
@@ -251,15 +253,16 @@ func complexExpectedConfigs(projectDir string) []*ConfigState {
 				},
 				Rows: []*ConfigRow{},
 			},
-			Manifest: &ManifestConfig{
-				BranchId:    111,
-				ComponentId: "keboola.ex-generic",
-				Path:        "keboola.ex-generic/456-todos",
-				Id:          "456",
-				Rows:        []*ManifestConfigRow{},
+			Manifest: &ConfigManifest{
+				BranchId:     111,
+				ComponentId:  "keboola.ex-generic",
+				Path:         "keboola.ex-generic/456-todos",
+				Id:           "456",
+				Rows:         []*ConfigRowManifest{},
+				RelativePath: "main/keboola.ex-generic/456-todos",
+				MetadataFile: "main/keboola.ex-generic/456-todos/meta.json",
+				ConfigFile:   "main/keboola.ex-generic/456-todos/config.json",
 			},
-			MetadataFile: projectDir + "/main/keboola.ex-generic/456-todos/meta.json",
-			ConfigFile:   projectDir + "/main/keboola.ex-generic/456-todos/config.json",
 		},
 		{
 			BranchId:    123,
@@ -327,28 +330,47 @@ func complexExpectedConfigs(projectDir string) []*ConfigState {
 					},
 				},
 			},
-			Manifest: &ManifestConfig{
+			Manifest: &ConfigManifest{
 				BranchId:    123,
 				ComponentId: "keboola.ex-db-mysql",
 				Path:        "keboola.ex-db-mysql/896-tables",
 				Id:          "896",
-				Rows: []*ManifestConfigRow{
+				Rows: []*ConfigRowManifest{
 					{
-						Path: "12-users",
-						Id:   "12",
+						Path:         "12-users",
+						Id:           "12",
+						BranchId:     123,
+						ComponentId:  "keboola.ex-db-mysql",
+						ConfigId:     "896",
+						RelativePath: "123-branch/keboola.ex-db-mysql/896-tables/rows/12-users",
+						MetadataFile: "123-branch/keboola.ex-db-mysql/896-tables/rows/12-users/meta.json",
+						ConfigFile:   "123-branch/keboola.ex-db-mysql/896-tables/rows/12-users/config.json",
 					},
 					{
-						Path: "34-test-view",
-						Id:   "34",
+						Path:         "34-test-view",
+						Id:           "34",
+						BranchId:     123,
+						ComponentId:  "keboola.ex-db-mysql",
+						ConfigId:     "896",
+						RelativePath: "123-branch/keboola.ex-db-mysql/896-tables/rows/34-test-view",
+						MetadataFile: "123-branch/keboola.ex-db-mysql/896-tables/rows/34-test-view/meta.json",
+						ConfigFile:   "123-branch/keboola.ex-db-mysql/896-tables/rows/34-test-view/config.json",
 					},
 					{
-						Path: "56-disabled",
-						Id:   "56",
+						Path:         "56-disabled",
+						Id:           "56",
+						BranchId:     123,
+						ComponentId:  "keboola.ex-db-mysql",
+						ConfigId:     "896",
+						RelativePath: "123-branch/keboola.ex-db-mysql/896-tables/rows/56-disabled",
+						MetadataFile: "123-branch/keboola.ex-db-mysql/896-tables/rows/56-disabled/meta.json",
+						ConfigFile:   "123-branch/keboola.ex-db-mysql/896-tables/rows/56-disabled/config.json",
 					},
 				},
+				RelativePath: "123-branch/keboola.ex-db-mysql/896-tables",
+				MetadataFile: "123-branch/keboola.ex-db-mysql/896-tables/meta.json",
+				ConfigFile:   "123-branch/keboola.ex-db-mysql/896-tables/config.json",
 			},
-			MetadataFile: projectDir + "/123-branch/keboola.ex-db-mysql/896-tables/meta.json",
-			ConfigFile:   projectDir + "/123-branch/keboola.ex-db-mysql/896-tables/config.json",
 		},
 		{
 			BranchId:    123,
@@ -370,15 +392,16 @@ func complexExpectedConfigs(projectDir string) []*ConfigState {
 				},
 				Rows: []*ConfigRow{},
 			},
-			Manifest: &ManifestConfig{
-				BranchId:    123,
-				ComponentId: "keboola.ex-generic",
-				Path:        "keboola.ex-generic/456-todos",
-				Id:          "456",
-				Rows:        []*ManifestConfigRow{},
+			Manifest: &ConfigManifest{
+				BranchId:     123,
+				ComponentId:  "keboola.ex-generic",
+				Path:         "keboola.ex-generic/456-todos",
+				Id:           "456",
+				Rows:         []*ConfigRowManifest{},
+				RelativePath: "123-branch/keboola.ex-generic/456-todos",
+				MetadataFile: "123-branch/keboola.ex-generic/456-todos/meta.json",
+				ConfigFile:   "123-branch/keboola.ex-generic/456-todos/config.json",
 			},
-			MetadataFile: projectDir + "/123-branch/keboola.ex-generic/456-todos/meta.json",
-			ConfigFile:   projectDir + "/123-branch/keboola.ex-generic/456-todos/config.json",
 		},
 	}
 }

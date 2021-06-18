@@ -3,88 +3,73 @@ package diff
 import (
 	"fmt"
 	"go.uber.org/zap"
-	"keboola-as-code/src/api"
-	"keboola-as-code/src/client"
-	"keboola-as-code/src/utils"
 )
 
-func (r *Results) ApplyPull(logger *zap.SugaredLogger) error {
-	errors := &utils.Error{}
+type ActionType int
+
+const (
+	ActionSaveLocal ActionType = iota
+	ActionSaveRemote
+	ActionDeleteLocal
+	ActionDeleteRemote
+)
+
+type Action struct {
+	Result
+	Type ActionType
+}
+
+type Actions struct {
+	Actions []*Action
+}
+
+func (a *Action) String() string {
+	return a.StringPrefix() + " " + a.LocalPath()
+}
+
+func (a *Action) StringPrefix() string {
+	switch a.Result.State() {
+	case ResultNotSet:
+		return "? "
+	case ResultNotEqual:
+		return "CH"
+	case ResultEqual:
+		return "= "
+	default:
+		if a.Type == ActionSaveLocal || a.Type == ActionSaveRemote {
+			return "+ "
+		} else {
+			return "- "
+		}
+	}
+}
+
+func (a *Actions) Add(r Result, t ActionType) {
+	a.Actions = append(a.Actions, &Action{r, t})
+}
+
+func (a *Actions) Log(logger *zap.SugaredLogger) *Actions {
+	for range a.Actions {
+
+	}
+	return a
+}
+
+func (r *Results) PullActions() *Actions {
+	actions := &Actions{}
 	for _, item := range r.Results {
 		switch item.State() {
 		case ResultEqual:
 			// nop
 		case ResultNotEqual:
-			err := item.SaveLocal(logger)
-			if err != nil {
-				errors.Add(err)
-			}
+			actions.Add(item, ActionSaveLocal)
 		case ResultOnlyInLocal:
-			err := item.DeleteLocal(logger)
-			if err != nil {
-				errors.Add(err)
-			}
+			actions.Add(item, ActionDeleteLocal)
 		case ResultOnlyInRemote:
-			err := item.SaveLocal(logger)
-			if err != nil {
-				errors.Add(err)
-			}
+			actions.Add(item, ActionSaveLocal)
 		case ResultNotSet:
 			panic(fmt.Errorf("diff was not generated"))
 		}
 	}
-
-	if errors.Len() > 0 {
-		return fmt.Errorf("pull failed: %s", errors)
-	}
-
-	return nil
-}
-
-func (b *BranchDiff) SaveLocal(logger *zap.SugaredLogger) error {
-	return fmt.Errorf("TODO")
-}
-
-func (c *ConfigDiff) SaveLocal(logger *zap.SugaredLogger) error {
-	return fmt.Errorf("TODO")
-}
-
-func (r *ConfigRowDiff) SaveLocal(logger *zap.SugaredLogger) error {
-	return fmt.Errorf("TODO")
-}
-
-func (b *BranchDiff) SaveRemote(pool *client.Pool, a *api.StorageApi, logger *zap.SugaredLogger) error {
-	return fmt.Errorf("TODO")
-}
-
-func (c *ConfigDiff) SaveRemote(pool *client.Pool, a *api.StorageApi, logger *zap.SugaredLogger) error {
-	return fmt.Errorf("TODO")
-}
-
-func (r *ConfigRowDiff) SaveRemote(pool *client.Pool, a *api.StorageApi, logger *zap.SugaredLogger) error {
-	return fmt.Errorf("TODO")
-}
-
-func (b *BranchDiff) DeleteRemote(pool *client.Pool, a *api.StorageApi, logger *zap.SugaredLogger) error {
-	return fmt.Errorf("TODO")
-}
-
-func (c *ConfigDiff) DeleteRemote(pool *client.Pool, a *api.StorageApi, logger *zap.SugaredLogger) error {
-	return fmt.Errorf("TODO")
-}
-
-func (r *ConfigRowDiff) DeleteRemote(pool *client.Pool, a *api.StorageApi, logger *zap.SugaredLogger) error {
-	return fmt.Errorf("TODO")
-}
-
-func (b *BranchDiff) DeleteLocal(logger *zap.SugaredLogger) error {
-	return fmt.Errorf("TODO")
-}
-
-func (c *ConfigDiff) DeleteLocal(logger *zap.SugaredLogger) error {
-	return fmt.Errorf("TODO")
-}
-
-func (r *ConfigRowDiff) DeleteLocal(logger *zap.SugaredLogger) error {
-	return fmt.Errorf("TODO")
+	return actions
 }

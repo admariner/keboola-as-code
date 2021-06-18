@@ -11,6 +11,8 @@ import (
 )
 
 type Differ struct {
+	projectDir  string
+	metadataDir string
 	ctx         context.Context
 	api         *api.StorageApi
 	logger      *zap.SugaredLogger
@@ -20,12 +22,14 @@ type Differ struct {
 	error       *utils.Error
 }
 
-func NewDiffer(ctx context.Context, a *api.StorageApi, logger *zap.SugaredLogger, projectDir, metadataDir string) *Differ {
+func NewDiffer(projectDir, metadataDir string, ctx context.Context, a *api.StorageApi, logger *zap.SugaredLogger) *Differ {
 	d := &Differ{
-		ctx:    ctx,
-		api:    a,
-		logger: logger,
-		state:  model.NewState(projectDir, metadataDir),
+		projectDir:  projectDir,
+		metadataDir: metadataDir,
+		ctx:         ctx,
+		api:         a,
+		logger:      logger,
+		state:       model.NewState(projectDir),
 	}
 	return d
 }
@@ -49,13 +53,13 @@ func (d *Differ) Diff() (*Results, error) {
 	// Diff all states
 	d.results = []Result{}
 	d.error = &utils.Error{}
-	for _, b := range d.state.BranchesSlice() {
+	for _, b := range d.state.Branches() {
 		d.diffOne(&BranchState{b})
 	}
-	for _, c := range d.state.ConfigsSlice() {
+	for _, c := range d.state.Configs() {
 		d.diffOne(&ConfigState{c})
 	}
-	for _, r := range d.state.ConfigRowsSlice() {
+	for _, r := range d.state.ConfigRows() {
 		d.diffOne(&ConfigRowState{r})
 	}
 
@@ -94,7 +98,7 @@ func (d *Differ) loadRemoteState(ctx context.Context) func() error {
 func (d *Differ) loadLocalState() func() error {
 	return func() error {
 		d.logger.Debugf("Loading project local state.")
-		localErrors := model.LoadLocalState(d.state)
+		localErrors := model.LoadLocalState(d.state, d.projectDir, d.metadataDir)
 		if localErrors.Len() > 0 {
 			d.logger.Debugf("Project local state load failed: %s", localErrors)
 			return fmt.Errorf("cannot load project local state: %s", localErrors)
