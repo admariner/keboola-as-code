@@ -28,9 +28,9 @@ type TokenOwner struct {
 // Branch https://keboola.docs.apiary.io/#reference/development-branches/branches/list-branches
 type Branch struct {
 	Id          int    `json:"id" validate:"required"`
-	Name        string `json:"name" validate:"required"`
-	Description string `json:"description"`
-	IsDefault   bool   `json:"isDefault"`
+	Name        string `json:"name" validate:"required" diff:"true"`
+	Description string `json:"description" diff:"true"`
+	IsDefault   bool   `json:"isDefault" diff:"true"`
 }
 
 // Component https://keboola.docs.apiary.io/#reference/components-and-configurations/get-development-branch-components/get-development-branch-components
@@ -49,10 +49,10 @@ type Config struct {
 	BranchId          int                    `json:"branchId" validate:"required"`    // not present in API response, must be set manually
 	ComponentId       string                 `json:"componentId" validate:"required"` // not present in API response, must be set manually
 	Id                string                 `json:"id" validate:"required"`
-	Name              string                 `json:"name" validate:"required"`
-	Description       string                 `json:"description"`
+	Name              string                 `json:"name" validate:"required" diff:"true"`
+	Description       string                 `json:"description" diff:"true"`
 	ChangeDescription string                 `json:"changeDescription"`
-	Config            map[string]interface{} `json:"configuration" validate:"required"`
+	Config            map[string]interface{} `json:"configuration" validate:"required" diff:"true"`
 	Rows              []*ConfigRow           `json:"rows"`
 }
 
@@ -67,12 +67,12 @@ type ConfigRow struct {
 	BranchId          int                    `json:"branchId" validate:"required"`    // not present in API response, must be set manually
 	ComponentId       string                 `json:"componentId" validate:"required"` // not present in API response, must be set manually
 	ConfigId          string                 `json:"configId" validate:"required"`    // not present in API response, must be set manually
-	Id                string                 `json:"id" validate:"required"`
-	Name              string                 `json:"name" validate:"required"`
-	Description       string                 `json:"description"`
+	Id                string                 `json:"id" validate:"required" `
+	Name              string                 `json:"name" validate:"required" diff:"true"`
+	Description       string                 `json:"description" diff:"true"`
 	ChangeDescription string                 `json:"changeDescription"`
-	IsDisabled        bool                   `json:"isDisabled"`
-	Config            map[string]interface{} `json:"configuration" validate:"required"`
+	IsDisabled        bool                   `json:"isDisabled" diff:"true"`
+	Config            map[string]interface{} `json:"configuration" validate:"required" diff:"true"`
 }
 
 // Job - Storage API job

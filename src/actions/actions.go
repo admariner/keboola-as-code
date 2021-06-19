@@ -1,8 +1,8 @@
-package diff
+package actions
 
 import (
-	"fmt"
 	"go.uber.org/zap"
+	"keboola-as-code/src/diff"
 )
 
 type ActionType int
@@ -15,9 +15,14 @@ const (
 )
 
 type Action struct {
-	Result
+	diff.Result
 	Type ActionType
 }
+
+//SaveRemote(logger *zap.SugaredLogger, workers *errgroup.Group, pool *client.Pool, a *api.StorageApi) error
+//DeleteRemote(logger *zap.SugaredLogger, workers *errgroup.Group, pool *client.Pool, a *api.StorageApi) error
+//DeleteLocal(logger *zap.SugaredLogger, workers *errgroup.Group) error
+//SaveLocal(logger *zap.SugaredLogger, workers *errgroup.Group) error
 
 type Actions struct {
 	Actions []*Action
@@ -29,11 +34,11 @@ func (a *Action) String() string {
 
 func (a *Action) StringPrefix() string {
 	switch a.Result.State() {
-	case ResultNotSet:
+	case diff.ResultNotSet:
 		return "? "
-	case ResultNotEqual:
+	case diff.ResultNotEqual:
 		return "CH"
-	case ResultEqual:
+	case diff.ResultEqual:
 		return "= "
 	default:
 		if a.Type == ActionSaveLocal || a.Type == ActionSaveRemote {
@@ -44,32 +49,14 @@ func (a *Action) StringPrefix() string {
 	}
 }
 
-func (a *Actions) Add(r Result, t ActionType) {
+func (a *Actions) Add(r diff.Result, t ActionType) {
 	a.Actions = append(a.Actions, &Action{r, t})
 }
 
 func (a *Actions) Log(logger *zap.SugaredLogger) *Actions {
-	for range a.Actions {
-
+	logger.Debugf("Planned actions:")
+	for _, action := range a.Actions {
+		logger.Debugf(action.String())
 	}
 	return a
-}
-
-func (r *Results) PullActions() *Actions {
-	actions := &Actions{}
-	for _, item := range r.Results {
-		switch item.State() {
-		case ResultEqual:
-			// nop
-		case ResultNotEqual:
-			actions.Add(item, ActionSaveLocal)
-		case ResultOnlyInLocal:
-			actions.Add(item, ActionDeleteLocal)
-		case ResultOnlyInRemote:
-			actions.Add(item, ActionSaveLocal)
-		case ResultNotSet:
-			panic(fmt.Errorf("diff was not generated"))
-		}
-	}
-	return actions
 }

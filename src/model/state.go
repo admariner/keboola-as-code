@@ -18,6 +18,12 @@ type State struct {
 	configRows   map[string]*ConfigRowState
 }
 
+type ObjectState interface {
+	LocalState() interface{}
+	RemoteState() interface{}
+	LocalPath() string
+}
+
 type BranchState struct {
 	Id       int
 	Remote   *Branch
@@ -94,6 +100,20 @@ func (s *State) AddRemoteError(err error) {
 
 func (s *State) AddLocalError(err error) {
 	s.localErrors.Add(err)
+}
+
+func (s *State) All() []ObjectState {
+	var all []ObjectState
+	for _, branch := range s.Branches() {
+		all = append(all, branch)
+	}
+	for _, config := range s.Configs() {
+		all = append(all, config)
+	}
+	for _, row := range s.ConfigRows() {
+		all = append(all, row)
+	}
+	return all
 }
 
 func (s *State) Branches() []*BranchState {
@@ -200,7 +220,7 @@ func (s *State) SetConfigRowLocalState(configRow *ConfigRow, manifest *ConfigRow
 }
 
 func (s *State) getBranchState(branch *Branch) *BranchState {
-	key := branch.UniqId()
+	key := fmt.Sprintf("%d", branch.Id)
 	if _, ok := s.branches[key]; !ok {
 		s.branches[key] = &BranchState{
 			Id: branch.Id,
@@ -210,7 +230,7 @@ func (s *State) getBranchState(branch *Branch) *BranchState {
 }
 
 func (s *State) getComponentState(component *Component) *ComponentState {
-	key := component.UniqId()
+	key := fmt.Sprintf("%d_%s", component.BranchId, component.Id)
 	if _, ok := s.components[key]; !ok {
 		s.components[key] = &ComponentState{
 			BranchId: component.BranchId,
@@ -221,7 +241,7 @@ func (s *State) getComponentState(component *Component) *ComponentState {
 }
 
 func (s *State) getConfigState(config *Config) *ConfigState {
-	key := config.UniqId()
+	key := fmt.Sprintf("%d_%s_%s", config.BranchId, config.ComponentId, config.Id)
 	if _, ok := s.configs[key]; !ok {
 		s.configs[key] = &ConfigState{
 			BranchId:    config.BranchId,
@@ -233,7 +253,7 @@ func (s *State) getConfigState(config *Config) *ConfigState {
 }
 
 func (s *State) getConfigRowState(configRow *ConfigRow) *ConfigRowState {
-	key := configRow.UniqId()
+	key := fmt.Sprintf("%d_%s__%s_%s", configRow.BranchId, configRow.ComponentId, configRow.ConfigId, configRow.Id)
 	if _, ok := s.configRows[key]; !ok {
 		s.configRows[key] = &ConfigRowState{
 			BranchId:    configRow.BranchId,
@@ -243,6 +263,42 @@ func (s *State) getConfigRowState(configRow *ConfigRow) *ConfigRowState {
 		}
 	}
 	return s.configRows[key]
+}
+
+func (b *BranchState) LocalState() interface{} {
+	return b.Local
+}
+
+func (c *ConfigState) LocalState() interface{} {
+	return c.Local
+}
+
+func (r *ConfigRowState) LocalState() interface{} {
+	return r.Local
+}
+
+func (b *BranchState) RemoteState() interface{} {
+	return b.Remote
+}
+
+func (c *ConfigState) RemoteState() interface{} {
+	return c.Remote
+}
+
+func (r *ConfigRowState) RemoteState() interface{} {
+	return r.Remote
+}
+
+func (b *BranchState) LocalPath() string {
+	return b.Manifest.RelativePath
+}
+
+func (c *ConfigState) LocalPath() string {
+	return c.Manifest.RelativePath
+}
+
+func (r *ConfigRowState) LocalPath() string {
+	return r.Manifest.RelativePath
 }
 
 func (b *BranchState) CmpValue() string {
@@ -271,19 +327,4 @@ func (r *ConfigRowState) CmpValue() string {
 		name = r.Local.Name
 	}
 	return fmt.Sprintf("%d_%s_%s", r.BranchId, r.ComponentId, name)
-}
-
-func (b *Branch) UniqId() string {
-	return fmt.Sprintf("%d", b.Id)
-}
-
-func (c *Component) UniqId() string {
-	return fmt.Sprintf("%d_%s", c.BranchId, c.Id)
-}
-func (c *Config) UniqId() string {
-	return fmt.Sprintf("%d_%s_%s", c.BranchId, c.ComponentId, c.Id)
-}
-
-func (r *ConfigRow) UniqId() string {
-	return fmt.Sprintf("%d_%s__%s_%s", r.BranchId, r.ComponentId, r.ConfigId, r.Id)
 }
