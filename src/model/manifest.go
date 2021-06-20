@@ -2,11 +2,13 @@ package model
 
 import (
 	"fmt"
+	"github.com/iancoleman/strcase"
 	"keboola-as-code/src/json"
 	"keboola-as-code/src/utils"
 	"keboola-as-code/src/validator"
 	"os"
 	"path/filepath"
+	"regexp"
 )
 
 const (
@@ -112,8 +114,7 @@ func LoadManifest(projectDir string, metadataDir string) (*Manifest, error) {
 	// Resolve paths
 	branchById := make(map[int]*BranchManifest)
 	for _, branch := range m.Branches {
-		branch.RelativePath = branch.Path
-		branch.MetadataFile = filepath.Join(branch.RelativePath, MetaFile)
+		branch.Resolve()
 		branchById[branch.Id] = branch
 	}
 	for _, config := range m.Configs {
@@ -121,16 +122,9 @@ func LoadManifest(projectDir string, metadataDir string) (*Manifest, error) {
 		if !found {
 			return nil, fmt.Errorf("branch \"%d\" not found in manifest - referenced from the config \"%s:%s\" in \"%s\"", config.BranchId, config.ComponentId, config.Id, m.Path)
 		}
-		config.RelativePath = filepath.Join(branch.RelativePath, config.Path)
-		config.MetadataFile = filepath.Join(config.RelativePath, MetaFile)
-		config.ConfigFile = filepath.Join(config.RelativePath, ConfigFile)
+		config.Resolve(branch)
 		for _, row := range config.Rows {
-			row.BranchId = config.BranchId
-			row.ComponentId = config.ComponentId
-			row.ConfigId = config.Id
-			row.RelativePath = filepath.Join(config.RelativePath, RowsDir, row.Path)
-			row.MetadataFile = filepath.Join(row.RelativePath, MetaFile)
-			row.ConfigFile = filepath.Join(row.RelativePath, ConfigFile)
+			row.Resolve(config)
 		}
 	}
 
@@ -214,6 +208,26 @@ func (r *ConfigRowManifest) ConfigContent(projectDir string) (map[string]interfa
 	return config, nil
 }
 
+func (b *BranchManifest) Resolve() {
+	b.RelativePath = b.Path
+	b.MetadataFile = filepath.Join(b.RelativePath, MetaFile)
+}
+
+func (c *ConfigManifest) Resolve(b *BranchManifest) {
+	c.RelativePath = filepath.Join(b.RelativePath, c.Path)
+	c.MetadataFile = filepath.Join(c.RelativePath, MetaFile)
+	c.ConfigFile = filepath.Join(c.RelativePath, ConfigFile)
+}
+
+func (r *ConfigRowManifest) Resolve(c *ConfigManifest) {
+	r.BranchId = c.BranchId
+	r.ComponentId = c.ComponentId
+	r.ConfigId = c.Id
+	r.RelativePath = filepath.Join(c.RelativePath, RowsDir, r.Path)
+	r.MetadataFile = filepath.Join(r.RelativePath, MetaFile)
+	r.ConfigFile = filepath.Join(r.RelativePath, ConfigFile)
+}
+
 func (b *BranchManifest) ToModel(projectDir string) (*Branch, error) {
 	// Read metadata file
 	metadata, err := b.Metadata(projectDir)
@@ -282,6 +296,30 @@ func (r *ConfigRowManifest) ToModel(projectDir string) (*ConfigRow, error) {
 	return row, nil
 }
 
+func (b *Branch) GenerateManifest() *BranchManifest {
+	manifest := &BranchManifest{}
+	manifest.Id = b.Id
+	manifest.Path = nameToPath(b.Name)
+	manifest.Resolve()
+	return manifest
+}
+
+func (c *Config) GenerateManifest(b *BranchManifest) *ConfigManifest {
+	manifest := &ConfigManifest{}
+	manifest.Id = c.Id
+	manifest.Path = nameToPath(c.Name)
+	manifest.Resolve(b)
+	return manifest
+}
+
+func (r *ConfigRow) GenerateManifest(c *ConfigManifest) *ConfigRowManifest {
+	manifest := &ConfigRowManifest{}
+	manifest.Id = r.Id
+	manifest.Path = nameToPath(r.Name)
+	manifest.Resolve(c)
+	return manifest
+}
+
 func readConfigFile(kind, projectDir, relPath string, v interface{}) error {
 	path := filepath.Join(projectDir, relPath)
 	if !utils.IsFile(path) {
@@ -322,4 +360,8 @@ func readJsonFile(projectDir string, path string, v interface{}) error {
 		return err
 	}
 	return nil
+}
+
+func nameToPath(name string) string {
+	return regexp.MustCompile(`[^a-zA-Z0-9-]]`).ReplaceAllString(strcase.ToDelimited(name, '-'), "-")
 }

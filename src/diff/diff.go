@@ -6,6 +6,7 @@ import (
 	"keboola-as-code/src/model"
 	"keboola-as-code/src/utils"
 	"reflect"
+	"strings"
 )
 
 type typeName string
@@ -13,7 +14,7 @@ type typeName string
 type Differ struct {
 	state     *model.State
 	results   []*Result
-	typeCache map[typeName][]reflect.StructField
+	typeCache map[typeName]map[string]reflect.StructField
 	error     *utils.Error
 }
 
@@ -29,8 +30,9 @@ const (
 
 type Result struct {
 	model.ObjectState
-	State   ResultState
-	Changes map[string]string
+	State         ResultState
+	ChangedFields []string
+	Differences   map[string]string
 }
 
 type Results struct {
@@ -40,7 +42,7 @@ type Results struct {
 func NewDiffer(state *model.State) *Differ {
 	return &Differ{
 		state:     state,
-		typeCache: make(map[typeName][]reflect.StructField),
+		typeCache: make(map[typeName]map[string]reflect.StructField),
 	}
 }
 
@@ -66,21 +68,9 @@ func (d *Differ) Diff() (*Results, error) {
 }
 
 func (d *Differ) doDiff(state model.ObjectState) (*Result, error) {
-	// Validate
 	result := &Result{ObjectState: state}
 	remoteState := state.RemoteState()
 	localState := state.LocalState()
-	if remoteState == nil && localState == nil {
-		panic(fmt.Errorf("both local and remote state are not set"))
-	}
-	if remoteState == nil {
-		result.State = ResultOnlyInLocal
-		return result, nil
-	}
-	if localState == nil {
-		result.State = ResultOnlyInLocal
-		return result, nil
-	}
 
 	// Types must be same
 	remoteType := reflect.TypeOf(remoteState).Elem()
@@ -95,39 +85,71 @@ func (d *Differ) doDiff(state model.ObjectState) (*Result, error) {
 		return nil, fmt.Errorf(`no field with tag "diff:true" in struct "%s"`, remoteType.String())
 	}
 
-	// Diff all diffFields
-	result.Changes = make(map[string]string)
-	remoteValues := reflect.ValueOf(remoteState).Elem()
-	localValues := reflect.ValueOf(remoteState).Elem()
-	for _, field := range diffFields {
+	// Check values
+	result.ChangedFields = make([]string, 0)
+	result.Differences = make(map[string]string)
+	remoteValues := reflect.ValueOf(remoteState)
+	localValues := reflect.ValueOf(localState)
+	if remoteValues.IsNil() && localValues.IsNil() {
+		panic(fmt.Errorf("both local and remote state are not set"))
+	}
+	if remoteValues.IsNil() {
+		result.State = ResultOnlyInLocal
+		return result, nil
+	}
+	if localValues.IsNil() {
+		result.State = ResultOnlyInRemote
+		return result, nil
+	}
+
+	// Get pointer value
+	if remoteValues.Type().Kind() == reflect.Ptr {
+		remoteValues = remoteValues.Elem()
+	}
+	if localValues.Type().Kind() == reflect.Ptr {
+		localValues = localValues.Elem()
+	}
+
+	// Diff
+	for name, field := range diffFields {
 		difference := cmp.Diff(
 			remoteValues.FieldByName(field.Name).Interface(),
 			localValues.FieldByName(field.Name).Interface(),
 		)
 		if len(difference) > 0 {
-			result.Changes[field.Name] = difference
+			result.ChangedFields = append(result.ChangedFields, name)
+			result.Differences[name] = difference
 		}
 	}
-	if len(result.Changes) > 0 {
-		result.State = ResultEqual
-	} else {
+	if len(result.ChangedFields) > 0 {
 		result.State = ResultNotEqual
+	} else {
+		result.State = ResultEqual
 	}
 
 	return result, nil
 }
 
-func (d *Differ) getDiffFields(t reflect.Type) []reflect.StructField {
+func (d *Differ) getDiffFields(t reflect.Type) map[string]reflect.StructField {
 	if v, ok := d.typeCache[typeName(t.Name())]; ok {
 		return v
 	} else {
-		var diffFields []reflect.StructField
+		diffFields := make(map[string]reflect.StructField)
 		numFields := t.NumField()
 		for i := 0; i < numFields; i++ {
 			fieldType := t.Field(i)
+
+			// Use JSON name if present
+			name := fieldType.Name
+			jsonName := strings.Split(fieldType.Tag.Get("json"), ",")[0]
+			if jsonName != "" {
+				name = jsonName
+			}
+
+			// Field must be marked with tag `diff:"true"`
 			tag := fieldType.Tag.Get("diff")
 			if tag == "true" {
-				diffFields = append(diffFields, fieldType)
+				diffFields[name] = fieldType
 			}
 		}
 		d.typeCache[typeName(t.Name())] = diffFields
