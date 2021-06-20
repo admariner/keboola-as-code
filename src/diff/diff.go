@@ -1,12 +1,8 @@
 package diff
 
 import (
-	"context"
 	"fmt"
 	"github.com/google/go-cmp/cmp"
-	"go.uber.org/zap"
-	"golang.org/x/sync/errgroup"
-	"keboola-as-code/src/api"
 	"keboola-as-code/src/model"
 	"keboola-as-code/src/utils"
 	"reflect"
@@ -15,16 +11,10 @@ import (
 type typeName string
 
 type Differ struct {
-	projectDir  string
-	metadataDir string
-	ctx         context.Context
-	api         *api.StorageApi
-	logger      *zap.SugaredLogger
-	stateLoaded bool
-	state       *model.State
-	results     []*Result
-	typeCache   map[typeName][]reflect.StructField
-	error       *utils.Error
+	state     *model.State
+	results   []*Result
+	typeCache map[typeName][]reflect.StructField
+	error     *utils.Error
 }
 
 type ResultState int
@@ -38,6 +28,7 @@ const (
 )
 
 type Result struct {
+	model.ObjectState
 	State   ResultState
 	Changes map[string]string
 }
@@ -46,39 +37,19 @@ type Results struct {
 	Results []*Result
 }
 
-func NewDiffer(projectDir, metadataDir string, ctx context.Context, a *api.StorageApi, logger *zap.SugaredLogger) *Differ {
-	d := &Differ{
-		projectDir:  projectDir,
-		metadataDir: metadataDir,
-		ctx:         ctx,
-		api:         a,
-		logger:      logger,
-		state:       model.NewState(projectDir),
+func NewDiffer(state *model.State) *Differ {
+	return &Differ{
+		state:     state,
+		typeCache: make(map[typeName][]reflect.StructField),
 	}
-	return d
-}
-
-func (d *Differ) LoadState() error {
-	grp, ctx := errgroup.WithContext(d.ctx)
-	grp.Go(d.loadRemoteState(ctx))
-	grp.Go(d.loadLocalState())
-	err := grp.Wait()
-	if err == nil {
-		d.stateLoaded = true
-	}
-	return err
 }
 
 func (d *Differ) Diff() (*Results, error) {
-	if !d.stateLoaded {
-		panic("LoadState() must be called before Diff()")
-	}
-
 	// Diff all states
 	d.results = []*Result{}
 	d.error = &utils.Error{}
 	for _, objectState := range d.state.All() {
-		result, err := d.diffObjectState(objectState)
+		result, err := d.doDiff(objectState)
 		if err != nil {
 			d.error.Add(err)
 		} else {
@@ -94,40 +65,40 @@ func (d *Differ) Diff() (*Results, error) {
 	return &Results{d.results}, err
 }
 
-func (d *Differ) diffObjectState(state model.ObjectState) (*Result, error) {
+func (d *Differ) doDiff(state model.ObjectState) (*Result, error) {
 	// Validate
-	result := &Result{}
-	remote := state.RemoteState()
-	local := state.LocalState()
-	if remote == nil && local == nil {
+	result := &Result{ObjectState: state}
+	remoteState := state.RemoteState()
+	localState := state.LocalState()
+	if remoteState == nil && localState == nil {
 		panic(fmt.Errorf("both local and remote state are not set"))
 	}
-	if remote == nil {
+	if remoteState == nil {
 		result.State = ResultOnlyInLocal
 		return result, nil
 	}
-	if local == nil {
+	if localState == nil {
 		result.State = ResultOnlyInLocal
 		return result, nil
 	}
 
 	// Types must be same
-	remoteType := reflect.TypeOf(remote)
-	localType := reflect.TypeOf(local)
+	remoteType := reflect.TypeOf(remoteState).Elem()
+	localType := reflect.TypeOf(localState).Elem()
 	if remoteType.String() != localType.String() {
 		panic(fmt.Errorf("local(%s) and remote(%s) states must have same data type", remoteType, localType))
 	}
 
-	// All available fields for diff
-	diffFields := d.diffFieldsForType(remoteType)
+	// Get available fields for diff
+	diffFields := d.getDiffFields(remoteType)
 	if len(diffFields) == 0 {
 		return nil, fmt.Errorf(`no field with tag "diff:true" in struct "%s"`, remoteType.String())
 	}
 
 	// Diff all diffFields
 	result.Changes = make(map[string]string)
-	remoteValues := reflect.ValueOf(remote).Elem()
-	localValues := reflect.ValueOf(remote).Elem()
+	remoteValues := reflect.ValueOf(remoteState).Elem()
+	localValues := reflect.ValueOf(remoteState).Elem()
 	for _, field := range diffFields {
 		difference := cmp.Diff(
 			remoteValues.FieldByName(field.Name).Interface(),
@@ -146,7 +117,7 @@ func (d *Differ) diffObjectState(state model.ObjectState) (*Result, error) {
 	return result, nil
 }
 
-func (d *Differ) diffFieldsForType(t reflect.Type) []reflect.StructField {
+func (d *Differ) getDiffFields(t reflect.Type) []reflect.StructField {
 	if v, ok := d.typeCache[typeName(t.Name())]; ok {
 		return v
 	} else {
@@ -161,33 +132,5 @@ func (d *Differ) diffFieldsForType(t reflect.Type) []reflect.StructField {
 		}
 		d.typeCache[typeName(t.Name())] = diffFields
 		return diffFields
-	}
-}
-
-func (d *Differ) loadRemoteState(ctx context.Context) func() error {
-	return func() error {
-		d.logger.Debugf("Loading project remote state.")
-		remoteErrors := d.api.LoadRemoteState(d.state, ctx)
-		if remoteErrors.Len() > 0 {
-			d.logger.Debugf("Project remote state load failed: %s", remoteErrors)
-			return fmt.Errorf("cannot load project remote state: %s", remoteErrors)
-		} else {
-			d.logger.Debugf("Project remote state successfully loaded.")
-		}
-		return nil
-	}
-}
-
-func (d *Differ) loadLocalState() func() error {
-	return func() error {
-		d.logger.Debugf("Loading project local state.")
-		localErrors := model.LoadLocalState(d.state, d.projectDir, d.metadataDir)
-		if localErrors.Len() > 0 {
-			d.logger.Debugf("Project local state load failed: %s", localErrors)
-			return fmt.Errorf("cannot load project local state: %s", localErrors)
-		} else {
-			d.logger.Debugf("Project local state successfully loaded.")
-		}
-		return nil
 	}
 }
