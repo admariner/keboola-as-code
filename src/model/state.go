@@ -23,7 +23,7 @@ type ObjectState interface {
 	Kind() string
 	LocalState() interface{}
 	RemoteState() interface{}
-	Manifest() interface{}
+	Manifest() *ManifestPath
 	RelativePath() string
 }
 
@@ -331,18 +331,6 @@ func (s *State) getConfigRowState(branchId int, componentId, configId, rowId str
 	return s.configRows[key]
 }
 
-func (b *BranchState) Kind() string {
-	return "branch"
-}
-
-func (c *ConfigState) Kind() string {
-	return "config"
-}
-
-func (r *ConfigRowState) Kind() string {
-	return "row"
-}
-
 func (b *BranchState) LocalState() interface{} {
 	return b.Local
 }
@@ -367,16 +355,16 @@ func (r *ConfigRowState) RemoteState() interface{} {
 	return r.Remote
 }
 
-func (b *BranchState) Manifest() interface{} {
-	return b.BranchManifest
+func (b *BranchState) Manifest() *ManifestPath {
+	return b.BranchManifest.ManifestPath
 }
 
-func (c *ConfigState) Manifest() interface{} {
-	return c.ConfigManifest
+func (c *ConfigState) Manifest() *ManifestPath {
+	return c.ConfigManifest.ManifestPath
 }
 
-func (r *ConfigRowState) Manifest() interface{} {
-	return r.ConfigRowManifest
+func (r *ConfigRowState) Manifest() *ManifestPath {
+	return r.ConfigRowManifest.ManifestPath
 }
 
 func (b *BranchState) CmpValue() string {
