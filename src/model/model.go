@@ -38,9 +38,13 @@ type Component struct {
 	Id        string                 `json:"id" validate:"required"`
 	Type      string                 `json:"type" validate:"required"`
 	Name      string                 `json:"name" validate:"required"`
-	Configs   []*Config              `json:"configurations" validate:"required"`
 	Schema    map[string]interface{} `json:"configurationSchema,omitempty"`
 	SchemaRow map[string]interface{} `json:"configurationRowSchema,omitempty"`
+}
+
+type ComponentWithConfigs struct {
+	*Component
+	Configs []*Config `json:"configurations" validate:"required"`
 }
 
 // Config https://keboola.docs.apiary.io/#reference/components-and-configurations/component-configurations/list-configurations

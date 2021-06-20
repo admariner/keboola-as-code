@@ -101,7 +101,6 @@ func TestConfigApiCalls(t *testing.T) {
 func expectedComponentsConfigTest() string {
 	return `[
   {
-    "branchId": %s,
     "id": "ex-generic-v2",
     "type": "extractor",
     "name": "Generic",

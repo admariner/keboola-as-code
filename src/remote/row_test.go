@@ -95,7 +95,6 @@ func TestConfigRowApiCalls(t *testing.T) {
 func expectedComponentsConfigRowTest() string {
 	return `[
   {
-    "branchId": %s,
     "id": "ex-generic-v2",
     "type": "extractor",
     "name": "Generic",
