@@ -12,35 +12,12 @@ import (
 	"testing"
 )
 
-func TestLoadLocalStateNoManifest(t *testing.T) {
-	defer utils.ResetEnv(t, os.Environ())
-	state, err := loadLocalTestState(t, "no-manifest")
-	assert.NotNil(t, state)
-	assert.NotNil(t, err)
-	assert.Equal(t, `manifest ".keboola/manifest.json" not found`, err.Error())
-}
-
-func TestLoadLocalStateInvalidManifest(t *testing.T) {
-	defer utils.ResetEnv(t, os.Environ())
-	state, err := loadLocalTestState(t, "invalid-manifest")
-	assert.NotNil(t, state)
-	assert.NotNil(t, err)
-	assert.Equal(t, `manifest ".keboola/manifest.json" is not valid: invalid character 'f' looking for beginning of object key string, offset: 3`, err.Error())
-}
-
-func TestLoadLocalStateEmptyManifest(t *testing.T) {
-	defer utils.ResetEnv(t, os.Environ())
-	state, err := loadLocalTestState(t, "empty-manifest")
-	assert.NotNil(t, state)
-	assert.NotNil(t, err)
-	assert.Regexp(t, "^manifest is not valid:.*", err.Error())
-}
-
 func TestLoadLocalStateMinimal(t *testing.T) {
 	defer utils.ResetEnv(t, os.Environ())
 	state, err := loadLocalTestState(t, "minimal")
 	assert.NotNil(t, state)
 	assert.NotNil(t, err)
+	assert.Empty(t, err.Error())
 	assert.Equal(t, 0, err.Len())
 	assert.Len(t, state.Branches(), 1)
 	assert.Len(t, state.Configs(), 1)
@@ -60,6 +37,7 @@ func TestLoadLocalStateComplex(t *testing.T) {
 	state, err := loadLocalTestState(t, "complex")
 	assert.NotNil(t, state)
 	assert.NotNil(t, err)
+	assert.Empty(t, err.Error())
 	assert.Equal(t, 0, err.Len())
 	assert.Equal(t, complexLocalExpectedBranches(), state.Branches())
 	assert.Equal(t, complexLocalExpectedConfigs(), state.Configs())
@@ -218,7 +196,7 @@ func complexLocalExpectedBranches() []*model.BranchState {
 				IsDefault:   true,
 			},
 			BranchManifest: &model.BranchManifest{
-				ManifestPath: &model.ManifestPath{
+				ManifestPaths: model.ManifestPaths{
 					Path:       "main",
 					ParentPath: "",
 				},
@@ -234,7 +212,7 @@ func complexLocalExpectedBranches() []*model.BranchState {
 				IsDefault:   false,
 			},
 			BranchManifest: &model.BranchManifest{
-				ManifestPath: &model.ManifestPath{
+				ManifestPaths: model.ManifestPaths{
 					Path:       "123-branch",
 					ParentPath: "",
 				},
@@ -267,7 +245,7 @@ func complexLocalExpectedConfigs() []*model.ConfigState {
 				Rows: []*model.ConfigRow{},
 			},
 			ConfigManifest: &model.ConfigManifest{
-				ManifestPath: &model.ManifestPath{
+				ManifestPaths: model.ManifestPaths{
 					Path:       "keboola.ex-generic/456-todos",
 					ParentPath: "main",
 				},
@@ -344,7 +322,7 @@ func complexLocalExpectedConfigs() []*model.ConfigState {
 				},
 			},
 			ConfigManifest: &model.ConfigManifest{
-				ManifestPath: &model.ManifestPath{
+				ManifestPaths: model.ManifestPaths{
 					Path:       "keboola.ex-db-mysql/896-tables",
 					ParentPath: "123-branch",
 				},
@@ -353,7 +331,7 @@ func complexLocalExpectedConfigs() []*model.ConfigState {
 				Id:          "896",
 				Rows: []*model.ConfigRowManifest{
 					{
-						ManifestPath: &model.ManifestPath{
+						ManifestPaths: model.ManifestPaths{
 							Path:       "12-users",
 							ParentPath: "123-branch/keboola.ex-db-mysql/896-tables/rows",
 						},
@@ -363,7 +341,7 @@ func complexLocalExpectedConfigs() []*model.ConfigState {
 						ConfigId:    "896",
 					},
 					{
-						ManifestPath: &model.ManifestPath{
+						ManifestPaths: model.ManifestPaths{
 							Path:       "34-test-view",
 							ParentPath: "123-branch/keboola.ex-db-mysql/896-tables/rows",
 						},
@@ -373,7 +351,7 @@ func complexLocalExpectedConfigs() []*model.ConfigState {
 						ConfigId:    "896",
 					},
 					{
-						ManifestPath: &model.ManifestPath{
+						ManifestPaths: model.ManifestPaths{
 							Path:       "56-disabled",
 							ParentPath: "123-branch/keboola.ex-db-mysql/896-tables/rows",
 						},
@@ -406,7 +384,7 @@ func complexLocalExpectedConfigs() []*model.ConfigState {
 				Rows: []*model.ConfigRow{},
 			},
 			ConfigManifest: &model.ConfigManifest{
-				ManifestPath: &model.ManifestPath{
+				ManifestPaths: model.ManifestPaths{
 					Path:       "keboola.ex-generic/456-todos",
 					ParentPath: "123-branch",
 				},

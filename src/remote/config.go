@@ -65,6 +65,7 @@ func (a *StorageApi) ListComponentsRequest(branchId int) *client.Request {
 			if response.Result() != nil {
 				// Add missing values
 				for _, component := range components {
+					component.BranchId = branchId
 					// Set config IDs
 					for _, config := range component.Configs {
 						config.BranchId = branchId

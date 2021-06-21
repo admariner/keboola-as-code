@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"github.com/iancoleman/orderedmap"
 	"github.com/iancoleman/strcase"
 	"github.com/spf13/cast"
 	"go.uber.org/zap"
@@ -33,14 +34,15 @@ type Manifest struct {
 	Configs     []*ConfigManifest `json:"configurations"`
 }
 
-type ManifestX interface {
+type ObjectManifest interface {
 	Kind() string
 	KindAbbr() string
+	Paths() ManifestPaths
 }
 
-type ManifestPath struct {
+type ManifestPaths struct {
 	Path       string `json:"path" validate:"required"`
-	ParentPath string `validate:"required"` // generated, not in JSON
+	ParentPath string `json:"-" validate:"required"` // generated, not in JSON
 }
 
 type ProjectManifest struct {
@@ -49,24 +51,24 @@ type ProjectManifest struct {
 }
 
 type BranchManifest struct {
-	*ManifestPath
 	Id int `json:"id" validate:"required,min=1"`
+	ManifestPaths
 }
 
 type ConfigManifest struct {
-	*ManifestPath
-	BranchId    int                  `json:"branchId" validate:"required"`
-	ComponentId string               `json:"componentId" validate:"required"`
-	Id          string               `json:"id" validate:"required,min=1"`
-	Rows        []*ConfigRowManifest `json:"rows"`
+	BranchId    int    `json:"branchId" validate:"required"`
+	ComponentId string `json:"componentId" validate:"required"`
+	Id          string `json:"id" validate:"required,min=1"`
+	ManifestPaths
+	Rows []*ConfigRowManifest `json:"rows"`
 }
 
 type ConfigRowManifest struct {
-	*ManifestPath
 	Id          string `json:"id" validate:"required,min=1"`
 	BranchId    int    `json:"-" validate:"required"` // generated, not in JSON
 	ComponentId string `json:"-" validate:"required"` // generated, not in JSON
 	ConfigId    string `json:"-" validate:"required"` // generated, not in JSON
+	ManifestPaths
 }
 
 func NewManifest(projectId int, apiHost string, projectDir, metadataDir string) (*Manifest, error) {
@@ -158,7 +160,8 @@ func (m *Manifest) Save() error {
 	return os.WriteFile(m.Path, data, 0650)
 }
 
-func (m *Manifest) LoadModel(path *ManifestPath, model interface{}) error {
+func (m *Manifest) LoadModel(om ObjectManifest, model interface{}) error {
+	paths := om.Paths()
 	modelType := reflect.TypeOf(model).Elem()
 	modelValue := reflect.ValueOf(model).Elem()
 
@@ -166,14 +169,11 @@ func (m *Manifest) LoadModel(path *ManifestPath, model interface{}) error {
 	metaFields := utils.GetFieldsWithTag("metaFile", "true", modelType, model)
 	if len(metaFields) > 0 {
 		metadataContent := make(map[string]interface{})
-		metadataFile := filepath.Join(path.AbsolutePath(m.ProjectDir), MetaFile)
-		content, err := os.ReadFile(metadataFile)
-		if err != nil {
+		metadataFile := filepath.Join(paths.AbsolutePath(m.ProjectDir), MetaFile)
+		if err := readJsonFile(m.ProjectDir, metadataFile, &metadataContent, om.Kind()+" metadata"); err != nil {
 			return err
 		}
-		if err := json.Decode(content, &metadataContent); err != nil {
-			return err
-		}
+
 		for _, field := range metaFields {
 			// Use JSON name if present
 			name := field.Name
@@ -182,14 +182,10 @@ func (m *Manifest) LoadModel(path *ManifestPath, model interface{}) error {
 				name = jsonName
 			}
 
-			// Check if present
-			value, ok := metadataContent[name]
-			if !ok {
-				return fmt.Errorf("missing field \"%s\" in metadata file \"%s\"", name, utils.RelPath(m.ProjectDir, metadataFile))
+			// Set value, some value are optional, model will be validated later
+			if value, ok := metadataContent[name]; ok {
+				modelValue.FieldByName(field.Name).Set(reflect.ValueOf(value))
 			}
-
-			// Set value
-			modelValue.FieldByName(field.Name).Set(reflect.ValueOf(value))
 		}
 	}
 
@@ -198,14 +194,10 @@ func (m *Manifest) LoadModel(path *ManifestPath, model interface{}) error {
 	if len(configFields) > 1 {
 		panic(fmt.Errorf("struct \"%s\" has multiple fields with tag `configFile:\"true\"`, but only one allowed", modelType))
 	} else if len(configFields) == 1 {
-		configFile := filepath.Join(path.RelativePath(), ConfigFile)
-		if !utils.IsFile(configFile) {
-			return fmt.Errorf("%s JSON file \"%s\" not found", "X", configFile)
-		}
-
+		configFile := filepath.Join(paths.AbsolutePath(m.ProjectDir), ConfigFile)
 		v := make(map[string]interface{})
-		if err := readJsonFile(m.ProjectDir, configFile, v); err != nil {
-			return fmt.Errorf("%s JSON file \"%s\" is invalid: %s", "x", configFile, err)
+		if err := readJsonFile(m.ProjectDir, configFile, &v, om.Kind()); err != nil {
+			return err
 		}
 		modelValue.FieldByName(configFields[0].Name).Set(reflect.ValueOf(v))
 	}
@@ -213,10 +205,17 @@ func (m *Manifest) LoadModel(path *ManifestPath, model interface{}) error {
 	return nil
 }
 
-func (m *Manifest) SaveModel(path *ManifestPath, model interface{}, logger *zap.SugaredLogger) error {
+func (m *Manifest) SaveModel(om ObjectManifest, model interface{}, logger *zap.SugaredLogger) error {
+	paths := om.Paths()
+
+	// Mkdir
+	if err := os.MkdirAll(paths.AbsolutePath(m.ProjectDir), 06500); err != nil {
+		return err
+	}
+
 	// Write metadata file
 	if metadata := m.toMetadataFile(model); metadata != nil {
-		metadataFile := filepath.Join(path.AbsolutePath(m.ProjectDir), MetaFile)
+		metadataFile := filepath.Join(paths.AbsolutePath(m.ProjectDir), MetaFile)
 		metadataJson, err := json.Encode(metadata, true)
 		if err != nil {
 			return err
@@ -224,12 +223,12 @@ func (m *Manifest) SaveModel(path *ManifestPath, model interface{}, logger *zap.
 		if err := os.WriteFile(metadataFile, metadataJson, 0650); err != nil {
 			return err
 		}
-		logger.Debugf("Saved \"%s\"", metadataFile)
+		logger.Debugf("Saved \"%s\"", utils.RelPath(m.ProjectDir, metadataFile))
 	}
 
 	// Write config file
 	if configContent := m.toConfigFile(model); configContent != nil {
-		configFile := filepath.Join(path.AbsolutePath(m.ProjectDir), ConfigFile)
+		configFile := filepath.Join(paths.AbsolutePath(m.ProjectDir), ConfigFile)
 		configJson, err := json.Encode(configContent, true)
 		if err != nil {
 			return err
@@ -237,16 +236,18 @@ func (m *Manifest) SaveModel(path *ManifestPath, model interface{}, logger *zap.
 		if err := os.WriteFile(configFile, configJson, 0650); err != nil {
 			return err
 		}
-		logger.Debugf("Saved \"%s\"", configFile)
+		logger.Debugf("Saved \"%s\"", utils.RelPath(m.ProjectDir, configFile))
 	}
 
 	return nil
 }
 
-func (m *Manifest) DeleteModel(path *ManifestPath, model interface{}, logger *zap.SugaredLogger) error {
+func (m *Manifest) DeleteModel(om ObjectManifest, model interface{}, logger *zap.SugaredLogger) error {
+	paths := om.Paths()
+
 	// Delete metadata file
 	if metadata := m.toMetadataFile(model); metadata != nil {
-		metadataFile := filepath.Join(path.AbsolutePath(m.ProjectDir), MetaFile)
+		metadataFile := filepath.Join(paths.AbsolutePath(m.ProjectDir), MetaFile)
 		if err := os.Remove(metadataFile); err != nil {
 			return err
 		}
@@ -255,7 +256,7 @@ func (m *Manifest) DeleteModel(path *ManifestPath, model interface{}, logger *za
 
 	// Delete config file
 	if configContent := m.toConfigFile(model); configContent != nil {
-		configFile := filepath.Join(path.AbsolutePath(m.ProjectDir), ConfigFile)
+		configFile := filepath.Join(paths.AbsolutePath(m.ProjectDir), ConfigFile)
 		if err := os.Remove(configFile); err != nil {
 			return err
 		}
@@ -272,8 +273,8 @@ func (m *Manifest) validate() error {
 	return nil
 }
 
-func (m *Manifest) toMetadataFile(model interface{}) map[string]interface{} {
-	target := make(map[string]interface{})
+func (m *Manifest) toMetadataFile(model interface{}) *orderedmap.OrderedMap {
+	target := orderedmap.New()
 	modelType := reflect.TypeOf(model).Elem()
 	modelValue := reflect.ValueOf(model).Elem()
 	for _, field := range utils.GetFieldsWithTag("metaFile", "true", modelType, model) {
@@ -285,7 +286,7 @@ func (m *Manifest) toMetadataFile(model interface{}) map[string]interface{} {
 		}
 
 		// Get field value
-		target[name] = modelValue.FieldByName(field.Name).Interface()
+		target.Set(name, modelValue.FieldByName(field.Name).Interface())
 	}
 	return target
 }
@@ -306,24 +307,28 @@ func (m *Manifest) toConfigFile(model interface{}) map[string]interface{} {
 	return modelValue.FieldByName(fields[0].Name).Interface().(map[string]interface{})
 }
 
-func (o *ManifestPath) RelativePath() string {
+func (o ManifestPaths) Paths() ManifestPaths {
+	return o
+}
+
+func (o *ManifestPaths) RelativePath() string {
 	return filepath.Join(o.ParentPath, o.Path)
 }
 
-func (o *ManifestPath) AbsolutePath(projectDir string) string {
+func (o *ManifestPaths) AbsolutePath(projectDir string) string {
 	return filepath.Join(projectDir, o.RelativePath())
 }
 
-func (o *ManifestPath) MetadataFilePath() string {
+func (o *ManifestPaths) MetadataFilePath() string {
 	return filepath.Join(o.RelativePath(), MetaFile)
 }
 
-func (o *ManifestPath) ConfigFilePath() string {
+func (o *ManifestPaths) ConfigFilePath() string {
 	return filepath.Join(o.RelativePath(), ConfigFile)
 }
 
 func (b *BranchManifest) Kind() string {
-	return "config"
+	return "branch"
 }
 
 func (c *ConfigManifest) Kind() string {
@@ -360,7 +365,7 @@ func (r *ConfigRowManifest) ResolvePaths(c *ConfigManifest) {
 
 func (b *BranchManifest) ToModel(m *Manifest) (*Branch, error) {
 	branch := &Branch{Id: b.Id}
-	if err := m.LoadModel(b.ManifestPath, branch); err != nil {
+	if err := m.LoadModel(b, branch); err != nil {
 		return nil, err
 	}
 	return branch, nil
@@ -368,7 +373,7 @@ func (b *BranchManifest) ToModel(m *Manifest) (*Branch, error) {
 
 func (c *ConfigManifest) ToModel(m *Manifest) (*Config, error) {
 	config := &Config{BranchId: c.BranchId, ComponentId: c.ComponentId, Id: c.Id, Rows: make([]*ConfigRow, 0)}
-	if err := m.LoadModel(c.ManifestPath, config); err != nil {
+	if err := m.LoadModel(c, config); err != nil {
 		return nil, err
 	}
 	return config, nil
@@ -376,7 +381,7 @@ func (c *ConfigManifest) ToModel(m *Manifest) (*Config, error) {
 
 func (r *ConfigRowManifest) ToModel(m *Manifest) (*ConfigRow, error) {
 	row := &ConfigRow{BranchId: r.BranchId, ComponentId: r.ComponentId, ConfigId: r.ConfigId, Id: r.Id}
-	if err := m.LoadModel(r.ManifestPath, row); err != nil {
+	if err := m.LoadModel(r, row); err != nil {
 		return nil, err
 	}
 	return row, nil
@@ -407,44 +412,20 @@ func (r *ConfigRow) GenerateManifest(c *ConfigManifest) *ConfigRowManifest {
 	return manifest
 }
 
-//func readConfigFile(kind, projectDir, relPath string, v interface{}) error {
-//	path := filepath.Join(projectDir, relPath)
-//	if !utils.IsFile(path) {
-//		return fmt.Errorf("%s JSON file \"%s\" not found", kind, relPath)
-//	}
-//
-//	if err := readJsonFile(projectDir, path, v); err != nil {
-//		return fmt.Errorf("%s JSON file \"%s\" is invalid: %s", kind, relPath, err)
-//	}
-//	return nil
-//}
-//
-//func readMetadataFile(kind, projectDir, relPath string, v interface{}) error {
-//	path := filepath.Join(projectDir, relPath)
-//	if !utils.IsFile(path) {
-//		return fmt.Errorf("%s metadata JSON file \"%s\" not found", kind, relPath)
-//	}
-//
-//	if err := readJsonFile(projectDir, path, v); err != nil {
-//		return fmt.Errorf("%s metadata JSON file \"%s\" is invalid: %s", kind, relPath, err)
-//	}
-//	return nil
-//}
-
-func readJsonFile(projectDir string, path string, v interface{}) error {
+func readJsonFile(projectDir string, path string, v interface{}, errPrefix string) error {
 	// Read meta file
 	if !utils.IsFile(path) {
-		return fmt.Errorf("file not found \"%s\"", utils.RelPath(projectDir, path))
+		return fmt.Errorf("%s JSON file \"%s\" not found", errPrefix, utils.RelPath(projectDir, path))
 	}
 	content, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("cannot read file \"%s\"", utils.RelPath(projectDir, path))
+		return fmt.Errorf("cannot read %s JSON file \"%s\"", errPrefix, utils.RelPath(projectDir, path))
 	}
 
 	// Decode meta file
 	err = json.Decode(content, v)
 	if err != nil {
-		return err
+		return fmt.Errorf("%s JSON file \"%s\" is invalid: %s", errPrefix, utils.RelPath(projectDir, path), err)
 	}
 	return nil
 }

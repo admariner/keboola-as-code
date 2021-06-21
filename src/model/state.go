@@ -23,7 +23,7 @@ type ObjectState interface {
 	Kind() string
 	LocalState() interface{}
 	RemoteState() interface{}
-	Manifest() *ManifestPath
+	Manifest() ObjectManifest
 	RelativePath() string
 }
 
@@ -355,16 +355,16 @@ func (r *ConfigRowState) RemoteState() interface{} {
 	return r.Remote
 }
 
-func (b *BranchState) Manifest() *ManifestPath {
-	return b.BranchManifest.ManifestPath
+func (b *BranchState) Manifest() ObjectManifest {
+	return b.BranchManifest
 }
 
-func (c *ConfigState) Manifest() *ManifestPath {
-	return c.ConfigManifest.ManifestPath
+func (c *ConfigState) Manifest() ObjectManifest {
+	return c.ConfigManifest
 }
 
-func (r *ConfigRowState) Manifest() *ManifestPath {
-	return r.ConfigRowManifest.ManifestPath
+func (r *ConfigRowState) Manifest() ObjectManifest {
+	return r.ConfigRowManifest
 }
 
 func (b *BranchState) CmpValue() string {

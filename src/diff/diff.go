@@ -78,8 +78,8 @@ func (d *Differ) doDiff(state model.ObjectState) (*Result, error) {
 	localState := state.LocalState()
 	remoteType := reflect.TypeOf(remoteState).Elem()
 	localType := reflect.TypeOf(localState).Elem()
-	remoteValues := reflect.ValueOf(remoteState).Elem()
-	localValues := reflect.ValueOf(localState).Elem()
+	remoteValues := reflect.ValueOf(remoteState)
+	localValues := reflect.ValueOf(localState)
 
 	// Types must be same
 	if remoteType.String() != localType.String() {

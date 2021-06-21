@@ -3,6 +3,7 @@ package diff
 import (
 	"github.com/stretchr/testify/assert"
 	"keboola-as-code/src/model"
+	"strings"
 	"testing"
 )
 
@@ -91,10 +92,8 @@ func TestDiffNotEqual(t *testing.T) {
 	result := results.Results[0]
 	assert.Equal(t, ResultNotEqual, result.State)
 	assert.Equal(t, []string{"name", "isDefault"}, result.ChangedFields)
-	assert.Equal(t, map[string]string{
-		"name":      "\u00A0 string(\n- \t\"name\",\n+ \t\"changed\",\n  )\n",
-		"isDefault": "  bool(\n- \tfalse,\n+ \ttrue,\n  )\n",
-	}, result.Differences)
+	assert.Equal(t, "  string(\n- \t\"name\",\n+ \t\"changed\",\n  )\n", strings.ReplaceAll(result.Differences["name"], " ", " "))
+	assert.Equal(t, "  bool(\n- \tfalse,\n+ \ttrue,\n  )\n", strings.ReplaceAll(result.Differences["isDefault"], " ", " "))
 	assert.Same(t, branchRemote, result.ObjectState.RemoteState().(*model.Branch))
 	assert.Same(t, branchLocal, result.ObjectState.LocalState().(*model.Branch))
 }

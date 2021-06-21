@@ -76,6 +76,8 @@ func pullCommand(root *rootCommand) *cobra.Command {
 			}
 			root.logger.Debugf("Saved manifest file \"%s\".", utils.RelPath(projectDir, manifest.Path))
 
+			// Done
+			root.logger.Info("Pull done.")
 			return nil
 		},
 	}

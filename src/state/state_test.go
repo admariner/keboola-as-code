@@ -47,7 +47,7 @@ func TestLoadState(t *testing.T) {
 				IsDefault:   true,
 			},
 			BranchManifest: &model.BranchManifest{
-				ManifestPath: &model.ManifestPath{
+				ManifestPaths: model.ManifestPaths{
 					Path:       "main",
 					ParentPath: "",
 				},
@@ -87,7 +87,7 @@ func TestLoadState(t *testing.T) {
 				Rows: []*model.ConfigRow{},
 			},
 			ConfigManifest: &model.ConfigManifest{
-				ManifestPath: &model.ManifestPath{
+				ManifestPaths: model.ManifestPaths{
 					Path:       "ex-generic-v2/456-todos",
 					ParentPath: "main",
 				},

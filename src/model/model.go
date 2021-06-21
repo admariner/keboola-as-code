@@ -43,6 +43,7 @@ type Component struct {
 }
 
 type ComponentWithConfigs struct {
+	BranchId int `json:"branchId" validate:"required"` // not present in API response, must be set manually
 	*Component
 	Configs []*Config `json:"configurations" validate:"required"`
 }
@@ -73,9 +74,9 @@ type ConfigRow struct {
 	Id                string                 `json:"id" validate:"required" `
 	Name              string                 `json:"name" validate:"required" diff:"true" metaFile:"true"`
 	Description       string                 `json:"description" diff:"true" metaFile:"true"`
+	ChangeDescription string                 `json:"changeDescription"`
 	IsDisabled        bool                   `json:"isDisabled" diff:"true" metaFile:"true"`
 	Config            map[string]interface{} `json:"configuration" validate:"required" diff:"true" configFile:"true"`
-	ChangeDescription string                 `json:"changeDescription"`
 }
 
 // Job - Storage API job

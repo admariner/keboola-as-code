@@ -30,6 +30,18 @@ func TestNewManifest(t *testing.T) {
 	assert.NotNil(t, manifest)
 }
 
+func TestLoadNotFound(t *testing.T) {
+	projectDir := t.TempDir()
+	metadataDir := filepath.Join(projectDir, MetadataDir)
+	assert.NoError(t, os.MkdirAll(metadataDir, 0650))
+
+	// Load
+	manifest, err := LoadManifest(projectDir, metadataDir)
+	assert.Nil(t, manifest)
+	assert.Error(t, err)
+	assert.Equal(t, `manifest ".keboola/manifest.json" not found`, err.Error())
+}
+
 func TestLoad(t *testing.T) {
 	for _, c := range cases {
 		projectDir := t.TempDir()
@@ -196,14 +208,14 @@ func fullStruct() *Manifest {
 		},
 		Branches: []*BranchManifest{
 			{
-				ManifestPath: &ManifestPath{
+				ManifestPaths: ManifestPaths{
 					Path:       "main",
 					ParentPath: "",
 				},
 				Id: 10,
 			},
 			{
-				ManifestPath: &ManifestPath{
+				ManifestPaths: ManifestPaths{
 					Path:       "11-dev",
 					ParentPath: "",
 				},
@@ -212,7 +224,7 @@ func fullStruct() *Manifest {
 		},
 		Configs: []*ConfigManifest{
 			{
-				ManifestPath: &ManifestPath{
+				ManifestPaths: ManifestPaths{
 					Path:       "11-raw-data",
 					ParentPath: "main",
 				},
@@ -221,7 +233,7 @@ func fullStruct() *Manifest {
 				Id:          "11",
 				Rows: []*ConfigRowManifest{
 					{
-						ManifestPath: &ManifestPath{
+						ManifestPaths: ManifestPaths{
 							Path:       "101-region-1",
 							ParentPath: "main/11-raw-data/rows",
 						},
@@ -231,7 +243,7 @@ func fullStruct() *Manifest {
 						ConfigId:    "11",
 					},
 					{
-						ManifestPath: &ManifestPath{
+						ManifestPaths: ManifestPaths{
 							Path:       "102-region-2",
 							ParentPath: "main/11-raw-data/rows",
 						},
@@ -243,7 +255,7 @@ func fullStruct() *Manifest {
 				},
 			},
 			{
-				ManifestPath: &ManifestPath{
+				ManifestPaths: ManifestPaths{
 					Path:       "12-current-month",
 					ParentPath: "11-dev",
 				},
@@ -252,7 +264,7 @@ func fullStruct() *Manifest {
 				Id:          "12",
 				Rows: []*ConfigRowManifest{
 					{
-						ManifestPath: &ManifestPath{
+						ManifestPaths: ManifestPaths{
 							Path:       "103-all",
 							ParentPath: "11-dev/12-current-month/rows",
 						},
@@ -262,7 +274,7 @@ func fullStruct() *Manifest {
 						ConfigId:    "12",
 					},
 					{
-						ManifestPath: &ManifestPath{
+						ManifestPaths: ManifestPaths{
 							Path:       "104-sum",
 							ParentPath: "11-dev/12-current-month/rows",
 						},
