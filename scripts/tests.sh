@@ -8,7 +8,7 @@ set -o pipefail         # Use last non-zero exit code in a pipeline
 
 SRC_DIR=./src
 
-# Check Go files format
+# Download modules
 echo "Downloading modules"
 go mod download
 echo "Ok."
