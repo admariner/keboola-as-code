@@ -138,9 +138,7 @@ func CompileBinary(t *testing.T, projectDir string, tempDir string) string {
 	cmd := exec.Command(projectDir+"/scripts/compile.sh", binaryPath)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err := cmd.Run()
-
-	if err != nil {
+	if err := cmd.Run(); err != nil {
 		t.Fatalf("Compilation failed: %s\n%s\n%s\n", err, stdout.Bytes(), stderr.Bytes())
 	}
 
