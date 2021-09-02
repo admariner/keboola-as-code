@@ -8,16 +8,28 @@ set -o pipefail         # Use last non-zero exit code in a pipeline
 
 cd "$(dirname "$0")"/..
 
-# Fix modules
-go mod tidy
+# Check Go files format
+echo "Downloading modules"
+go mod download
+echo "Ok."
+echo
 
-# Fix linters
+# Check modules
+echo "Running go mod tidy/verify ..."
+go mod tidy
+git diff --exit-code -- go.mod go.sum
+go mod verify
+echo "Ok. Tidy: go.mod and go.sum are valid."
+echo
+
+# Run linters
 cd ./src
-if golangci-lint run --fix -c "../.golangci.yml"; then
+echo "Running golangci-lint ..."
+if golangci-lint run -c "../.golangci.yml"; then
     echo "Ok. The code looks good."
     echo
 else
-    echo "Some errors ^^^ cannot be fixed. Please fix them manually."
+    echo "Please fix ^^^ errors. You can try run \"make fix\"."
     echo
     exit 1
 fi

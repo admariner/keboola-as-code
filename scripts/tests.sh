@@ -6,56 +6,12 @@ set -o nounset          # Disallow expansion of unset variables
 set -o pipefail         # Use last non-zero exit code in a pipeline
 #set -o xtrace          # Trace the execution of the script (debug)
 
-SRC_DIR=./src
+cd "$(dirname "$0")"/..
 
 # Check Go files format
 echo "Downloading modules"
 go mod download
 echo "Ok."
-echo
-
-# Check Go files format
-echo "Running gofmt ..."
-gofmtOut=`gofmt -s -l $SRC_DIR`
-if [[ "$gofmtOut" ]]; then
-  echo "Go files are not properly formatted, please run \"make fix\" to fix."
-  echo "Fix needed:"
-  echo "$gofmtOut"
-  exit 1
-fi
-echo "Ok. Code is properly formatted."
-echo
-
-# Check Go imports
-echo "Running goimports ..."
-goimportsOut=`goimports -local "keboola-as-code" -e -d $SRC_DIR`
-if [[ "$goimportsOut" ]]; then
-  echo "Go imports are not properly formatted, please run \"make fix\" to fix."
-  echo "Fix needed:"
-  echo "$goimportsOut"
-  exit 1
-fi
-echo "Ok. Imports are properly formatted."
-echo
-
-# Check for suspicious constructs
-echo "Running go vet ..."
-go vet ./src/...
-echo "Ok. No suspicious constructs found."
-echo
-
-# Check modules
-echo "Running go mod tidy/verify ..."
-go mod tidy
-git diff --exit-code -- go.mod go.sum
-go mod verify
-echo "Ok. Tidy: go.mod and go.sum are valid."
-echo
-
-# Run staticcheck
-echo "Running staticcheck ..."
-staticcheck ./src/...
-echo "Ok. The code looks good."
 echo
 
 # Run tests, sequentially because the API is shared resource
