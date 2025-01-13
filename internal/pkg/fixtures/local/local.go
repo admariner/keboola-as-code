@@ -1,15 +1,18 @@
 package fixtures
 
 import (
+	"context"
 	"runtime"
 
+	"github.com/keboola/keboola-as-code/internal/pkg/env"
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem"
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem/aferofs"
+	"github.com/keboola/keboola-as-code/internal/pkg/log"
 	"github.com/keboola/keboola-as-code/internal/pkg/project/manifest"
 	"github.com/keboola/keboola-as-code/internal/pkg/utils/testhelper"
 )
 
-func LoadFS(dirName string, envs testhelper.EnvProvider) (filesystem.Fs, error) {
+func LoadFS(ctx context.Context, dirName string, envs testhelper.EnvProvider) (filesystem.Fs, error) {
 	// nolint: dogsled
 	_, thisFile, _, _ := runtime.Caller(0)
 	fixturesDir := filesystem.Dir(thisFile)
@@ -17,18 +20,18 @@ func LoadFS(dirName string, envs testhelper.EnvProvider) (filesystem.Fs, error) 
 
 	// Create Fs
 	fs := aferofs.NewMemoryFsFrom(stateDir)
-	testhelper.MustReplaceEnvsDir(fs, `/`, envs)
+	err := testhelper.ReplaceEnvsDir(ctx, fs, `/`, envs)
 
-	return fs, nil
+	return fs, err
 }
 
-func LoadManifest(dirName string, envs testhelper.EnvProvider) (*manifest.Manifest, filesystem.Fs, error) {
-	fs, err := LoadFS(dirName, envs)
+func LoadManifest(ctx context.Context, dirName string, envs testhelper.EnvProvider) (*manifest.Manifest, filesystem.Fs, error) {
+	fs, err := LoadFS(ctx, dirName, envs)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	m, err := manifest.Load(fs, false)
+	m, err := manifest.Load(ctx, log.NewNopLogger(), fs, env.Empty(), false)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/utils/errors"
@@ -17,11 +18,11 @@ func TestWorkers(t *testing.T) {
 	w := NewWorkers(context.Background())
 
 	counter := atomic.NewInt64(0)
-	w.AddWorker(func() error {
+	w.AddWorker(func(ctx context.Context) error {
 		counter.Inc()
 		return nil
 	})
-	w.AddWorker(func() error {
+	w.AddWorker(func(ctx context.Context) error {
 		counter.Inc()
 		return nil
 	})
@@ -31,7 +32,7 @@ func TestWorkers(t *testing.T) {
 	assert.Equal(t, int64(0), counter.Load())
 
 	// Start and wait
-	assert.NoError(t, w.StartAndWait())
+	require.NoError(t, w.StartAndWait())
 	assert.Equal(t, int64(2), counter.Load())
 
 	// Cannot be reused
@@ -44,25 +45,25 @@ func TestWorkersErrors(t *testing.T) {
 	t.Parallel()
 	w := NewWorkers(context.Background())
 
-	w.AddWorker(func() error {
+	w.AddWorker(func(ctx context.Context) error {
 		return errors.New(`first`)
 	})
-	w.AddWorker(func() error {
+	w.AddWorker(func(ctx context.Context) error {
 		return errors.New(`second`)
 	})
-	w.AddWorker(func() error {
+	w.AddWorker(func(ctx context.Context) error {
 		return nil
 	})
-	w.AddWorker(func() error {
+	w.AddWorker(func(ctx context.Context) error {
 		return errors.New(`third`)
 	})
-	w.AddWorker(func() error {
+	w.AddWorker(func(ctx context.Context) error {
 		return nil
 	})
 
 	// The order of errors is the same as the workers were defined
 	err := w.StartAndWait()
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Equal(t, "- first\n- second\n- third", err.Error())
 }
 
@@ -75,14 +76,13 @@ func TestLocalUnitOfWork_workersFor(t *testing.T) {
 	var order []int
 
 	for _, level := range []int{3, 2, 4, 1} {
-		level := level
-		uow.workersFor(level).AddWorker(func() error {
+		uow.workersFor(level).AddWorker(func(ctx context.Context) error {
 			lock.Lock()
 			defer lock.Unlock()
 			order = append(order, level)
 			return nil
 		})
-		uow.workersFor(level).AddWorker(func() error {
+		uow.workersFor(level).AddWorker(func(ctx context.Context) error {
 			lock.Lock()
 			defer lock.Unlock()
 			order = append(order, level)
@@ -95,7 +95,7 @@ func TestLocalUnitOfWork_workersFor(t *testing.T) {
 	assert.Empty(t, order)
 
 	// Invoke
-	assert.NoError(t, uow.Invoke())
+	require.NoError(t, uow.Invoke())
 	assert.Equal(t, []int{1, 1, 2, 2, 3, 3, 4, 4}, order)
 
 	// Cannot be reused

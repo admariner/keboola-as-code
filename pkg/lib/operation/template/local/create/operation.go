@@ -3,6 +3,7 @@ package create
 import (
 	"context"
 	"fmt"
+	"io"
 
 	"github.com/keboola/go-client/pkg/keboola"
 
@@ -34,11 +35,12 @@ type Options struct {
 
 type dependencies interface {
 	Components() *model.ComponentsMap
-	KeboolaProjectAPI() *keboola.API
+	KeboolaProjectAPI() *keboola.AuthorizedAPI
 	LocalTemplateRepository(ctx context.Context) (*repository.Repository, bool, error)
 	Logger() log.Logger
 	Template(ctx context.Context, reference model.TemplateRef) (*template.Template, error)
 	Telemetry() telemetry.Telemetry
+	Stdout() io.Writer
 }
 
 func Run(ctx context.Context, o Options, d dependencies) (err error) {
@@ -101,7 +103,7 @@ func Run(ctx context.Context, o Options, d dependencies) (err error) {
 
 	// Done
 	templatePath := filesystem.Join(templateRecord.Path, versionRecord.Path)
-	d.Logger().Infof(`Template "%s" has been created.`, templatePath)
+	d.Logger().Infof(ctx, `Template "%s" has been created.`, templatePath)
 
 	return nil
 }
@@ -115,7 +117,7 @@ func createDir(ctx context.Context, o Options, d dependencies, repositoryDir fil
 	}
 
 	// Create src dir
-	if err := fs.Mkdir(template.SrcDirectory); err != nil {
+	if err := fs.Mkdir(ctx, template.SrcDirectory); err != nil {
 		return nil, err
 	}
 
@@ -124,7 +126,7 @@ func createDir(ctx context.Context, o Options, d dependencies, repositoryDir fil
 		NewRawFile(filesystem.Join(template.TestsDirectory, ".gitkeep"), "\n").
 		AddTag(model.FileKindGitKeep).
 		AddTag(model.FileTypeOther)
-	if err := fs.WriteFile(gitKeepFile); err != nil {
+	if err := fs.WriteFile(ctx, gitKeepFile); err != nil {
 		return nil, err
 	}
 
@@ -135,33 +137,33 @@ func createDir(ctx context.Context, o Options, d dependencies, repositoryDir fil
 	if _, err := createTemplateInputs.Run(ctx, fs, d); err != nil {
 		return nil, err
 	}
-	if err := createLongDesc(o, d, fs); err != nil {
+	if err := createLongDesc(ctx, o, d, fs); err != nil {
 		return nil, err
 	}
-	if err := createReadme(o, d, fs); err != nil {
+	if err := createReadme(ctx, o, d, fs); err != nil {
 		return nil, err
 	}
 	return fs, nil
 }
 
-func createLongDesc(o Options, d dependencies, fs filesystem.Fs) error {
+func createLongDesc(ctx context.Context, o Options, d dependencies, fs filesystem.Fs) error {
 	content := "### %s\n\n%s\n\n"
 	path := filesystem.Join("src", template.LongDescriptionFile)
 	file := filesystem.NewRawFile(path, fmt.Sprintf(content, o.Name, `Extended description`)).SetDescription(`extended description`)
-	if err := fs.WriteFile(file); err != nil {
+	if err := fs.WriteFile(ctx, file); err != nil {
 		return err
 	}
-	d.Logger().Infof("Created extended description file \"%s\".", file.Path())
+	d.Logger().Infof(ctx, "Created extended description file \"%s\".", file.Path())
 	return nil
 }
 
-func createReadme(o Options, d dependencies, fs filesystem.Fs) error {
+func createReadme(ctx context.Context, o Options, d dependencies, fs filesystem.Fs) error {
 	content := "### %s\n\n%s\n\n"
 	path := filesystem.Join("src", template.ReadmeFile)
 	file := filesystem.NewRawFile(path, fmt.Sprintf(content, o.Name, o.Description)).SetDescription(`readme`)
-	if err := fs.WriteFile(file); err != nil {
+	if err := fs.WriteFile(ctx, file); err != nil {
 		return err
 	}
-	d.Logger().Infof("Created readme file \"%s\".", file.Path())
+	d.Logger().Infof(ctx, "Created readme file \"%s\".", file.Path())
 	return nil
 }

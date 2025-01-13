@@ -1,0 +1,106 @@
+name: "E2E: Stream"
+
+on:
+  workflow_call:
+    inputs:
+      without-cache:
+        type: boolean
+        default: false
+        required: false
+
+env:
+  TEST_PARALLELISM: 16
+  TEST_PARALLELISM_PKG: 2
+
+# Required for aws-actions/configure-aws-credentials using OIDC, assume role
+permissions:
+  id-token: write
+  contents: read 
+
+jobs:
+  test:
+    name: test
+    strategy:
+      fail-fast: false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup line endings
+        run: git config --global core.autocrlf false
+
+      - name: Change default TEST_COVERAGE when on main branch
+        if: github.ref == 'refs/heads/main'
+        run: echo "TEST_COVERAGE=true" >> $GITHUB_ENV
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go, tools and caching
+        uses: ./.github/actions/go-setup
+        with:
+          build-type: e2e-tests-stream
+          without-cache: ${{ inputs.without-cache }}
+          cache-s3-bucket: ${{ vars.CACHE_S3_BUCKET }}
+
+      - name: Set TEST_KBC_PROJECTS_FILE entries
+        uses: ./.github/actions/export-kbc-projects
+        with:
+          secrets: ${{ toJSON(secrets) }}
+
+      - name: Start etcd database
+        run: |
+          set -Eeuo pipefail
+          docker compose run -d --rm --publish 2379:2379 etcd
+          sudo echo "127.0.0.1 etcd" | sudo tee -a /etc/hosts
+
+      - name: Run E2E tests
+        shell: bash
+        run: |
+          set -eo pipefail
+          
+          # Build binary for test without external inputs
+          env -i  \
+            TERM="$TERM" \
+            HOME="$HOME" \
+            PATH="$PATH" \
+            BUILD_TARGET_PATH="$TEST_BINARY_STREAM_SERVICE" \
+          make build-stream-service
+          touch -d '1970-01-01T00:00:01' "$TEST_BINARY_STREAM_SERVICE"
+          
+          # Calculate binary hash, it invalidates tests cache
+          export TEST_BINARY_STREAM_SERVICE_HASH=`cat "$TEST_BINARY_STREAM_SERVICE" | $MD5_COMMAND | cut -d " " -f1`
+          echo "Binary hash: $TEST_BINARY_STREAM_SERVICE_HASH" 
+          
+          # ENVs can affect test caching, make sure to only run tests with expected ENVs
+          env -i  \
+            TERM="$TERM" \
+            HOME="$HOME" \
+            PATH="$PATH" \
+            DATADOG_ENABLED="false" \
+            STREAM_ETCD_ENDPOINT="etcd:2379" \
+            STREAM_ETCD_USERNAME="root" \
+            STREAM_ETCD_PASSWORD="toor" \
+            UNIT_ETCD_ENABLED="true" \
+            UNIT_ETCD_ENDPOINT="etcd:2379" \
+            UNIT_ETCD_USERNAME="root" \
+            UNIT_ETCD_PASSWORD="toor" \
+            UNIT_ETCD_NAMESPACE="unit" \
+            TEST_BINARY_STREAM_SERVICE="$TEST_BINARY_STREAM_SERVICE" \
+            TEST_BINARY_STREAM_SERVICE_HASH="$TEST_BINARY_STREAM_SERVICE_HASH" \
+            TEST_PARALLELISM="$TEST_PARALLELISM" \
+            TEST_PARALLELISM_PKG="$TEST_PARALLELISM_PKG" \
+            TEST_COVERAGE="false" \
+            TEST_CREATE_OUT_DIR="false" \
+            TEST_KBC_PROJECTS_LOCK_HOST="$TEST_KBC_PROJECTS_LOCK_HOST" \
+            TEST_KBC_PROJECTS_LOCK_PASSWORD="$TEST_KBC_PROJECTS_LOCK_PASSWORD" \
+            TEST_KBC_PROJECTS_FILE="$TEST_KBC_PROJECTS_FILE" \
+          make tests-stream-service
+        env:
+          TEST_BINARY_STREAM_SERVICE: "${{ runner.temp }}/test-build-stream-service"
+          TEST_KBC_PROJECTS_LOCK_HOST: ${{ vars.TEST_KBC_PROJECTS_LOCK_HOST }}
+          TEST_KBC_PROJECTS_LOCK_PASSWORD: ${{ secrets.TEST_KBC_PROJECTS_LOCK_PASSWORD }}
+          TEST_KBC_PROJECTS_FILE: '${{ github.workspace }}/${{ vars.TEST_KBC_PROJECTS_FILE }}'
+
+      - name: Validate OpenAPI3 definition
+        uses: swaggerexpert/swagger-editor-validate@v1
+        with:
+          definition-file: internal/pkg/service/stream/api/openapi/openapi3.yaml

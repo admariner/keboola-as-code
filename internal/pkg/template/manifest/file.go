@@ -21,7 +21,7 @@ func Path() string {
 
 // file is template manifest JSON file.
 type file struct {
-	MainConfig *model.ConfigKey                `json:"mainConfig,omitempty" validate:"omitempty,dive"`
+	MainConfig *model.ConfigKey                `json:"mainConfig,omitempty"`
 	Configs    []*model.ConfigManifestWithRows `json:"configurations" validate:"dive"`
 }
 
@@ -31,7 +31,7 @@ func newFile() *file {
 	}
 }
 
-func evaluateFile(file *filesystem.RawFile, jsonnetCtx *jsonnet.Context) (*file, error) {
+func evaluateFile(ctx context.Context, file *filesystem.RawFile, jsonnetCtx *jsonnet.Context) (*file, error) {
 	// Evaluate Jsonnet code
 	jsonContent, err := jsonnet.Evaluate(file.Content, jsonnetCtx)
 	if err != nil {
@@ -44,16 +44,16 @@ func evaluateFile(file *filesystem.RawFile, jsonnetCtx *jsonnet.Context) (*file,
 	}
 
 	// Validate
-	if err := content.validate(); err != nil {
+	if err := content.validate(ctx); err != nil {
 		return nil, err
 	}
 
 	return content, nil
 }
 
-func saveFile(fs filesystem.Fs, content *file) error {
+func saveFile(ctx context.Context, fs filesystem.Fs, content *file) error {
 	// Validate
-	if err := content.validate(); err != nil {
+	if err := content.validate(ctx); err != nil {
 		return err
 	}
 
@@ -71,15 +71,15 @@ func saveFile(fs filesystem.Fs, content *file) error {
 
 	// Write file
 	f := filesystem.NewRawFile(Path(), jsonnetStr)
-	if err := fs.WriteFile(f); err != nil {
+	if err := fs.WriteFile(ctx, f); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func (f *file) validate() error {
-	ctx := context.WithValue(context.Background(), validator.DisableRequiredInProjectKey, true)
+func (f *file) validate(ctx context.Context) error {
+	ctx = context.WithValue(ctx, validator.DisableRequiredInProjectKey, true)
 	if err := validator.New().ValidateCtx(ctx, f, "dive", ""); err != nil {
 		return errors.PrefixError(err, "manifest is not valid")
 	}
@@ -87,7 +87,7 @@ func (f *file) validate() error {
 }
 
 func (f *file) records() []model.ObjectManifest {
-	var out []model.ObjectManifest
+	out := make([]model.ObjectManifest, 0, len(f.Configs))
 	for _, config := range f.Configs {
 		out = append(out, &config.ConfigManifest)
 		for _, row := range config.Rows {

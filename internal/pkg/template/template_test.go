@@ -1,9 +1,11 @@
 package template
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem"
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem/aferofs"
@@ -16,7 +18,7 @@ func initTemplate(t *testing.T, fs filesystem.Fs) *Template {
 	t.Helper()
 
 	version, err := model.NewSemVersion("v0.0.1")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	tmplRef := model.NewTemplateRef(model.TemplateRepository{Name: "my-repository"}, "my-template", version.String())
 	versionRec := repository.VersionRecord{
 		Version:     version,
@@ -40,15 +42,17 @@ func TestTemplate_TestsDir(t *testing.T) {
 
 	logger := log.NewDebugLogger()
 	fs := aferofs.NewMemoryFs(filesystem.WithLogger(logger))
-	assert.NoError(t, fs.Mkdir("tests/one"))
-	assert.NoError(t, fs.Mkdir("tests/two"))
+	ctx := context.Background()
+
+	require.NoError(t, fs.Mkdir(ctx, "tests/one"))
+	require.NoError(t, fs.Mkdir(ctx, "tests/two"))
 
 	tmpl := initTemplate(t, fs)
 
-	res, err := tmpl.TestsDir()
-	assert.NoError(t, err)
-	assert.True(t, res.IsDir("one"))
-	assert.True(t, res.IsDir("two"))
+	res, err := tmpl.TestsDir(ctx)
+	require.NoError(t, err)
+	assert.True(t, res.IsDir(ctx, "one"))
+	assert.True(t, res.IsDir(ctx, "two"))
 }
 
 func TestTemplate_Test(t *testing.T) {
@@ -56,16 +60,18 @@ func TestTemplate_Test(t *testing.T) {
 
 	logger := log.NewDebugLogger()
 	fs := aferofs.NewMemoryFs(filesystem.WithLogger(logger))
-	assert.NoError(t, fs.Mkdir("tests/one"))
-	assert.NoError(t, fs.Mkdir("tests/one/sub1"))
-	assert.NoError(t, fs.Mkdir("tests/two"))
-	assert.NoError(t, fs.Mkdir("tests/two/sub2"))
+	ctx := context.Background()
+
+	require.NoError(t, fs.Mkdir(ctx, "tests/one"))
+	require.NoError(t, fs.Mkdir(ctx, "tests/one/sub1"))
+	require.NoError(t, fs.Mkdir(ctx, "tests/two"))
+	require.NoError(t, fs.Mkdir(ctx, "tests/two/sub2"))
 
 	tmpl := initTemplate(t, fs)
 
-	test, err := tmpl.Test("one")
-	assert.NoError(t, err)
-	assert.True(t, test.fs.IsDir("sub1"))
+	test, err := tmpl.Test(ctx, "one")
+	require.NoError(t, err)
+	assert.True(t, test.fs.IsDir(ctx, "sub1"))
 }
 
 func TestTemplate_Tests(t *testing.T) {
@@ -73,13 +79,15 @@ func TestTemplate_Tests(t *testing.T) {
 
 	logger := log.NewDebugLogger()
 	fs := aferofs.NewMemoryFs(filesystem.WithLogger(logger))
-	assert.NoError(t, fs.Mkdir("tests/one"))
-	assert.NoError(t, fs.Mkdir("tests/two"))
+	ctx := context.Background()
+
+	require.NoError(t, fs.Mkdir(ctx, "tests/one"))
+	require.NoError(t, fs.Mkdir(ctx, "tests/two"))
 
 	tmpl := initTemplate(t, fs)
 
-	tests, err := tmpl.Tests()
-	assert.NoError(t, err)
+	tests, err := tmpl.Tests(ctx)
+	require.NoError(t, err)
 
 	testNames := make([]string, 0)
 	for _, test := range tests {
@@ -94,14 +102,16 @@ func TestTemplate_TestInputs(t *testing.T) {
 
 	logger := log.NewDebugLogger()
 	fs := aferofs.NewMemoryFs(filesystem.WithLogger(logger))
-	assert.NoError(t, fs.Mkdir("tests/one"))
-	assert.NoError(t, fs.WriteFile(filesystem.NewRawFile("tests/one/inputs.json", `{"foo":"bar"}`)))
+	ctx := context.Background()
+
+	require.NoError(t, fs.Mkdir(ctx, "tests/one"))
+	require.NoError(t, fs.WriteFile(ctx, filesystem.NewRawFile("tests/one/inputs.json", `{"foo":"bar"}`)))
 
 	tmpl := initTemplate(t, fs)
 
-	test, err := tmpl.Test("one")
-	assert.NoError(t, err)
-	res, err := test.Inputs(nil, nil, "")
-	assert.NoError(t, err)
-	assert.Equal(t, map[string]interface{}{"foo": "bar"}, res)
+	test, err := tmpl.Test(ctx, "one")
+	require.NoError(t, err)
+	res, err := test.Inputs(ctx, nil, nil, "")
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{"foo": "bar"}, res)
 }

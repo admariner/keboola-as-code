@@ -3,6 +3,7 @@ package prometheus
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -27,18 +28,30 @@ const (
 	shutdownTimeout = 30 * time.Second
 )
 
+type Config struct {
+	Listen string `configKey:"listen" configUsage:"Prometheus scraping metrics listen address." validate:"required,hostname_port"`
+}
+
 type errLogger struct {
 	logger log.Logger
 }
 
 func (l *errLogger) Println(v ...any) {
-	l.logger.Error(v...)
+	// The prometheus library doesn't provide a context of the message, so we have no choice but to use context.Background().
+	l.logger.Error(context.Background(), fmt.Sprint(v...))
+}
+
+func NewConfig() Config {
+	return Config{
+		Listen: "0.0.0.0:9000",
+	}
 }
 
 // ServeMetrics starts HTTP server for Prometheus metrics and return OpenTelemetry metrics provider.
 // Inspired by: https://github.com/open-telemetry/opentelemetry-go/blob/main/example/prometheus/main.go
-func ServeMetrics(ctx context.Context, serviceName, listenAddr string, logger log.Logger, proc *servicectx.Process) (*metric.MeterProvider, error) {
-	logger = logger.AddPrefix("[metrics]")
+func ServeMetrics(ctx context.Context, cfg Config, logger log.Logger, proc *servicectx.Process, serviceName string) (*metric.MeterProvider, error) {
+	logger = logger.WithComponent("metrics")
+	logger.Infof(ctx, `starting HTTP server on %q`, cfg.Listen)
 
 	// Create resource
 	res, err := resource.New(
@@ -58,29 +71,27 @@ func ServeMetrics(ctx context.Context, serviceName, listenAddr string, logger lo
 		return nil, err
 	}
 
-	// Register legacy OpenCensus metrics, for go-cloud (https://github.com/google/go-cloud/issues/2877)
-	exporter.RegisterProducer(opencensus.NewMetricProducer())
-
 	// Create HTTP metrics server
 	opts := promhttp.HandlerOpts{ErrorLog: &errLogger{logger: logger}}
 	handler := http.NewServeMux()
 	handler.Handle("/"+Endpoint, promhttp.HandlerFor(registry, opts))
-	srv := &http.Server{Addr: listenAddr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
-	proc.Add(func(ctx context.Context, shutdown servicectx.ShutdownFn) {
-		logger.Infof(`HTTP server listening on "%s/%s"`, listenAddr, Endpoint)
-		shutdown(srv.ListenAndServe())
+	srv := &http.Server{Addr: cfg.Listen, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	proc.Add(func(shutdown servicectx.ShutdownFn) {
+		logger.Infof(ctx, `started HTTP server on %q, endpoint %q"`, cfg.Listen, Endpoint)
+		serverErr := srv.ListenAndServe()         // ListenAndServe blocks while the server is running
+		shutdown(context.Background(), serverErr) // nolint: contextcheck // intentionally creating new context for the shutdown operation
 	})
-	proc.OnShutdown(func() {
-		logger.Infof(`shutting down HTTP server at "%s"`, listenAddr)
-
+	proc.OnShutdown(func(ctx context.Context) {
 		// Shutdown gracefully with a 30s timeout.
-		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		ctx, cancel := context.WithTimeout(ctx, shutdownTimeout)
 		defer cancel()
 
+		logger.Infof(ctx, `shutting down HTTP server at %q`, cfg.Listen)
+
 		if err := srv.Shutdown(ctx); err != nil {
-			logger.Errorf(`HTTP server shutdown error: %s`, err)
+			logger.Errorf(ctx, `HTTP server shutdown error: %s`, err)
 		}
-		logger.Info("HTTP server shutdown finished")
+		logger.Info(ctx, "HTTP server shutdown finished")
 	})
 
 	// Wait for server
@@ -91,6 +102,8 @@ func ServeMetrics(ctx context.Context, serviceName, listenAddr string, logger lo
 	// Create OpenTelemetry metrics provider
 	provider := metric.NewMeterProvider(
 		metric.WithReader(exporter),
+		// Register legacy OpenCensus metrics, for go-cloud (https://github.com/google/go-cloud/issues/2877)
+		metric.WithReader(metric.NewManualReader(metric.WithProducer(opencensus.NewMetricProducer()))),
 		metric.WithResource(res),
 		metric.WithView(View()),
 	)
@@ -102,17 +115,8 @@ func View() metric.View {
 		metric.Instrument{Name: "*"},
 		metric.Stream{AttributeFilter: func(value attribute.KeyValue) bool {
 			switch value.Key {
-			// Remove invalid otelhttp metric attributes with high cardinality.
-			// https://github.com/open-telemetry/opentelemetry-go-contrib/issues/3765
-			case "net.sock.peer.addr",
-				"net.sock.peer.port",
-				"http.user_agent",
-				"http.client_ip",
-				"http.request_content_length",
-				"http.response_content_length":
-				return false
 			// Remove unused attributes.
-			case "http.flavor":
+			case "http.flavor", "net.protocol.name", "net.protocol.version":
 				return false
 			}
 			return true

@@ -1,9 +1,11 @@
 package input
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestInput_ValidateUserInput(t *testing.T) {
@@ -17,16 +19,16 @@ func TestInput_ValidateUserInput(t *testing.T) {
 		Kind:        "input",
 		Rules:       "gte=5,lte=10",
 	}
-	err := input.ValidateUserInput(1)
-	assert.Error(t, err)
+	err := input.ValidateUserInput(context.Background(), 1)
+	require.Error(t, err)
 	assert.Equal(t, "my input must be 5 or greater", err.Error())
 
-	err = input.ValidateUserInput("1")
-	assert.Error(t, err)
+	err = input.ValidateUserInput(context.Background(), "1")
+	require.Error(t, err)
 	assert.Equal(t, "my input should be int, got string", err.Error())
 
-	assert.Error(t, err)
-	assert.NoError(t, input.ValidateUserInput(7))
+	require.Error(t, err)
+	require.NoError(t, input.ValidateUserInput(context.Background(), 7))
 
 	input = Input{
 		ID:          "input.id",
@@ -35,10 +37,10 @@ func TestInput_ValidateUserInput(t *testing.T) {
 		Type:        "bool",
 		Kind:        "confirm",
 	}
-	err = input.ValidateUserInput(1)
-	assert.Error(t, err)
+	err = input.ValidateUserInput(context.Background(), 1)
+	require.Error(t, err)
 	assert.Equal(t, "input should be bool, got int", err.Error())
-	assert.NoError(t, input.ValidateUserInput(true))
+	require.NoError(t, input.ValidateUserInput(context.Background(), true))
 }
 
 func TestInput_ValidateUserInputOAuth(t *testing.T) {
@@ -52,12 +54,12 @@ func TestInput_ValidateUserInputOAuth(t *testing.T) {
 		Kind:        "oauth",
 		ComponentID: "foo.bar",
 	}
-	err := input.ValidateUserInput([]string{"one", "two"})
-	assert.Error(t, err)
+	err := input.ValidateUserInput(context.Background(), []string{"one", "two"})
+	require.Error(t, err)
 	assert.Equal(t, "oauth should be object, got slice", err.Error())
 
-	err = input.ValidateUserInput(map[string]interface{}{"a": "b"})
-	assert.NoError(t, err)
+	err = input.ValidateUserInput(context.Background(), map[string]any{"a": "b"})
+	require.NoError(t, err)
 }
 
 func TestInput_Available(t *testing.T) {
@@ -72,11 +74,11 @@ func TestInput_Available(t *testing.T) {
 		Kind:        "input",
 		If:          "facebook_integration == true",
 	}
-	params := make(map[string]interface{}, 1)
+	params := make(map[string]any, 1)
 	params["facebook_integration"] = true
 	v, err := input.Available(params)
 	assert.True(t, v)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Check empty If evaluated as true
 	input = Input{
@@ -88,7 +90,7 @@ func TestInput_Available(t *testing.T) {
 	}
 	v, err = input.Available(nil)
 	assert.True(t, v)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Check If evaluated as false
 	input = Input{
@@ -99,9 +101,9 @@ func TestInput_Available(t *testing.T) {
 		Kind:        "input",
 		If:          "facebook_integration == true",
 	}
-	params = make(map[string]interface{}, 1)
+	params = make(map[string]any, 1)
 	params["facebook_integration"] = false
 	v, err = input.Available(params)
 	assert.False(t, v)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 }

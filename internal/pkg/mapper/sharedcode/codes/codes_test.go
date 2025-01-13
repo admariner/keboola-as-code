@@ -1,11 +1,12 @@
 package codes_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/keboola/go-client/pkg/keboola"
 	"github.com/keboola/go-utils/pkg/orderedmap"
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/mapper/sharedcode/codes"
 	"github.com/keboola/keboola-as-code/internal/pkg/model"
@@ -15,7 +16,7 @@ import (
 
 func createStateWithMapper(t *testing.T) (*state.State, dependencies.Mocked) {
 	t.Helper()
-	d := dependencies.NewMocked(t)
+	d := dependencies.NewMocked(t, context.Background())
 	mockedState := d.MockedState()
 	mockedState.Mapper().AddMapper(codes.NewMapper(mockedState))
 	return mockedState, d
@@ -48,7 +49,7 @@ func createRemoteSharedCode(t *testing.T, state *state.State) (*model.ConfigStat
 			Content:   configContent,
 		},
 	}
-	assert.NoError(t, state.Set(configState))
+	require.NoError(t, state.Set(configState))
 
 	// Row
 	rowKey := model.ConfigRowKey{
@@ -72,7 +73,7 @@ func createRemoteSharedCode(t *testing.T, state *state.State) (*model.ConfigStat
 			Content:      orderedmap.New(),
 		},
 	}
-	assert.NoError(t, state.Set(rowState))
+	require.NoError(t, state.Set(rowState))
 
 	return configState, rowState
 }
@@ -103,7 +104,7 @@ func createLocalSharedCode(t *testing.T, targetComponentID keboola.ComponentID, 
 			Content:   configContent,
 		},
 	}
-	assert.NoError(t, state.Set(configState))
+	require.NoError(t, state.Set(configState))
 
 	// Row
 	rowKey := model.ConfigRowKey{
@@ -127,7 +128,7 @@ func createLocalSharedCode(t *testing.T, targetComponentID keboola.ComponentID, 
 			Content:      orderedmap.New(),
 		},
 	}
-	assert.NoError(t, state.Set(rowState))
+	require.NoError(t, state.Set(rowState))
 
 	return configState, rowState
 }
@@ -167,7 +168,7 @@ func createInternalSharedCode(t *testing.T, targetComponentID keboola.ComponentI
 			},
 		},
 	}
-	assert.NoError(t, state.Set(configState))
+	require.NoError(t, state.Set(configState))
 
 	// Row
 	rowKey := model.ConfigRowKey{
@@ -209,7 +210,7 @@ func createInternalSharedCode(t *testing.T, targetComponentID keboola.ComponentI
 			},
 		},
 	}
-	assert.NoError(t, state.Set(rowState))
+	require.NoError(t, state.Set(rowState))
 
 	return configState, rowState
 }

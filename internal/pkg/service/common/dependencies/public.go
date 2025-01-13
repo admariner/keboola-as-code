@@ -15,7 +15,7 @@ import (
 type publicScope struct {
 	base             BaseScope
 	components       Lazy[*model.ComponentsProvider]
-	keboolaPublicAPI *keboola.API
+	keboolaPublicAPI *keboola.PublicAPI
 	stackFeatures    keboola.FeaturesMap
 	stackServices    keboola.ServicesMap
 	storageAPIHost   string
@@ -75,24 +75,24 @@ func newPublicScope(ctx context.Context, baseScp BaseScope, storageAPIHost strin
 	var index *keboola.Index
 	var indexWithComponents *keboola.IndexComponents
 	if cfg.preloadComponents {
-		logger.Info("loading Storage API index with components")
-		indexWithComponents, err = keboola.APIIndexWithComponents(ctx, storageAPIHost, keboola.WithClient(&baseHTTPClient))
+		logger.Info(ctx, "loading Storage API index with components")
+		indexWithComponents, err = keboola.APIIndexWithComponents(ctx, storageAPIHost, keboola.WithClient(&baseHTTPClient), keboola.WithOnSuccessTimeout(30*time.Second))
 		if err != nil {
 			return nil, err
 		}
 		index = &indexWithComponents.Index
-		logger.Infof(`loaded Storage API index with "%d" components | %s`, len(indexWithComponents.Components), time.Since(startTime))
+		logger.WithDuration(time.Since(startTime)).Infof(ctx, `loaded Storage API index with "%d" components`, len(indexWithComponents.Components))
 	} else {
-		logger.Info("loading Storage API index without components")
-		index, err = keboola.APIIndex(ctx, storageAPIHost, keboola.WithClient(&baseHTTPClient))
+		logger.Info(ctx, "loading Storage API index without components")
+		index, err = keboola.APIIndex(ctx, storageAPIHost, keboola.WithClient(&baseHTTPClient), keboola.WithOnSuccessTimeout(1*time.Minute))
 		if err != nil {
 			return nil, err
 		}
-		logger.Infof("loaded Storage API index without components | %s", time.Since(startTime))
+		logger.WithDuration(time.Since(startTime)).Infof(ctx, "loaded Storage API index without component")
 	}
 
 	// Create API
-	v.keboolaPublicAPI = keboola.NewAPIFromIndex(storageAPIHost, index, keboola.WithClient(&baseHTTPClient))
+	v.keboolaPublicAPI = keboola.NewPublicAPIFromIndex(storageAPIHost, index, keboola.WithClient(&baseHTTPClient), keboola.WithOnSuccessTimeout(1*time.Minute))
 
 	// Cache components list if it has been loaded
 	if indexWithComponents != nil {
@@ -106,7 +106,7 @@ func newPublicScope(ctx context.Context, baseScp BaseScope, storageAPIHost strin
 	return v, nil
 }
 
-func storageAPIIndexWithComponents(ctx context.Context, d BaseScope, keboolaPublicAPI *keboola.API) (index *keboola.IndexComponents, err error) {
+func storageAPIIndexWithComponents(ctx context.Context, d BaseScope, keboolaPublicAPI *keboola.PublicAPI) (index *keboola.IndexComponents, err error) {
 	startTime := time.Now()
 	ctx, span := d.Telemetry().Tracer().Start(ctx, "keboola.go.common.dependencies.public.storageApiIndexWithComponents")
 	defer span.End(&err)
@@ -115,7 +115,7 @@ func storageAPIIndexWithComponents(ctx context.Context, d BaseScope, keboolaPubl
 	if err != nil {
 		return nil, err
 	}
-	d.Logger().Debugf("Storage API index with components loaded | %s", time.Since(startTime))
+	d.Logger().WithDuration(time.Since(startTime)).Debugf(ctx, "Storage API index with components loaded")
 	return index, nil
 }
 
@@ -130,7 +130,7 @@ func (v *publicScope) StorageAPIHost() string {
 	return v.storageAPIHost
 }
 
-func (v *publicScope) KeboolaPublicAPI() *keboola.API {
+func (v *publicScope) KeboolaPublicAPI() *keboola.PublicAPI {
 	v.check()
 	return v.keboolaPublicAPI
 }

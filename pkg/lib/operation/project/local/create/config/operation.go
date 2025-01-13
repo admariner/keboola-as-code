@@ -2,7 +2,6 @@ package config
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/keboola/go-client/pkg/keboola"
 
@@ -21,7 +20,7 @@ type Options struct {
 }
 
 type dependencies interface {
-	KeboolaProjectAPI() *keboola.API
+	KeboolaProjectAPI() *keboola.AuthorizedAPI
 	Logger() log.Logger
 	Telemetry() telemetry.Telemetry
 }
@@ -62,6 +61,6 @@ func Run(ctx context.Context, projectState *project.State, o Options, d dependen
 		return err
 	}
 
-	logger.Info(fmt.Sprintf(`Created new %s "%s"`, key.Kind().Name, projectState.MustGet(key).Path()))
+	logger.Infof(ctx, `Created new %s "%s"`, key.Kind().Name, projectState.MustGet(key).Path())
 	return nil
 }

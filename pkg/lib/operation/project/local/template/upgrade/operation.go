@@ -2,6 +2,7 @@ package upgrade
 
 import (
 	"context"
+	"io"
 
 	"github.com/keboola/go-client/pkg/keboola"
 
@@ -25,12 +26,14 @@ type Options struct {
 type dependencies interface {
 	Logger() log.Logger
 	Components() *model.ComponentsMap
-	KeboolaProjectAPI() *keboola.API
+	KeboolaProjectAPI() *keboola.AuthorizedAPI
 	ObjectIDGeneratorFactory() func(ctx context.Context) *keboola.TicketProvider
 	ProjectID() keboola.ProjectID
+	ProjectBackends() []string
 	StorageAPIHost() string
 	StorageAPITokenID() string
 	Telemetry() telemetry.Telemetry
+	Stdout() io.Writer
 }
 
 func Run(ctx context.Context, projectState *project.State, tmpl *template.Template, o Options, d dependencies) (result *use.Result, err error) {
@@ -41,7 +44,7 @@ func Run(ctx context.Context, projectState *project.State, tmpl *template.Templa
 	tickets := d.ObjectIDGeneratorFactory()(ctx)
 
 	// Prepare template
-	tmplCtx := upgrade.NewContext(ctx, tmpl.Reference(), tmpl.ObjectsRoot(), o.Instance.InstanceID, o.Branch, o.Inputs, tmpl.Inputs().InputsMap(), tickets, d.Components(), projectState.State())
+	tmplCtx := upgrade.NewContext(ctx, tmpl.Reference(), tmpl.ObjectsRoot(), o.Instance.InstanceID, o.Branch, o.Inputs, tmpl.Inputs().InputsMap(), tickets, d.Components(), projectState.State(), d.ProjectBackends())
 	plan, err := use.PrepareTemplate(ctx, d, use.ExtendedOptions{
 		TargetBranch:          o.Branch,
 		Inputs:                o.Inputs,

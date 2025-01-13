@@ -1,24 +1,21 @@
 package task
 
 import (
-	"sort"
-
-	"github.com/spf13/cast"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/telemetry"
 )
 
-type meters struct {
+type metrics struct {
 	running  metric.Int64UpDownCounter
 	duration metric.Float64Histogram
 }
 
-func newMeters(meter telemetry.Meter) *meters {
-	return &meters{
-		running:  meter.UpDownCounter("keboola.go.task.running", "Background running tasks count.", ""),
-		duration: meter.Histogram("keboola.go.task.duration", "Background task duration.", "ms"),
+func newMetrics(meter telemetry.Meter) *metrics {
+	return &metrics{
+		running:  meter.IntUpDownCounter("keboola.go.task.running", "Background running tasks count.", ""),
+		duration: meter.FloatHistogram("keboola.go.task.duration", "Background task duration.", "ms"),
 	}
 }
 
@@ -68,7 +65,10 @@ func spanEndAttrs(task *Task, r Result) []attribute.KeyValue {
 
 	// Add result/error
 	if task.IsSuccessful() {
-		attribute.String("result", task.Result)
+		out = append(
+			out,
+			attribute.String("result", task.Result),
+		)
 	} else {
 		out = append(
 			out,
@@ -76,18 +76,6 @@ func spanEndAttrs(task *Task, r Result) []attribute.KeyValue {
 			attribute.String("error", task.Error),
 			attribute.String("error_type", telemetry.ErrorType(r.Error)),
 		)
-	}
-
-	// Add task outputs
-	{
-		var attrs []attribute.KeyValue
-		for k, v := range task.Outputs {
-			attrs = append(attrs, attribute.String("result_outputs."+k, cast.ToString(v)))
-		}
-		sort.SliceStable(attrs, func(i, j int) bool {
-			return attrs[i].Key < attrs[j].Key
-		})
-		out = append(out, attrs...)
 	}
 
 	return out

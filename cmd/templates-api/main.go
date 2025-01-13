@@ -3,18 +3,18 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"os"
 
-	"github.com/spf13/pflag"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
+	"gopkg.in/DataDog/dd-trace-go.v1/profiler"
 
-	"github.com/keboola/keboola-as-code/internal/pkg/env"
 	"github.com/keboola/keboola-as-code/internal/pkg/log"
+	"github.com/keboola/keboola-as-code/internal/pkg/service/common/configmap"
+	"github.com/keboola/keboola-as-code/internal/pkg/service/common/entrypoint"
 	"github.com/keboola/keboola-as-code/internal/pkg/service/common/httpserver"
 	"github.com/keboola/keboola-as-code/internal/pkg/service/common/httpserver/middleware"
 	"github.com/keboola/keboola-as-code/internal/pkg/service/common/servicectx"
@@ -25,99 +25,102 @@ import (
 	"github.com/keboola/keboola-as-code/internal/pkg/service/templates/api/service"
 	"github.com/keboola/keboola-as-code/internal/pkg/service/templates/dependencies"
 	"github.com/keboola/keboola-as-code/internal/pkg/telemetry"
+	"github.com/keboola/keboola-as-code/internal/pkg/telemetry/datadog"
 	"github.com/keboola/keboola-as-code/internal/pkg/telemetry/metric/prometheus"
-	"github.com/keboola/keboola-as-code/internal/pkg/utils/cpuprofile"
+	"github.com/keboola/keboola-as-code/internal/pkg/telemetry/pprof"
 	"github.com/keboola/keboola-as-code/internal/pkg/utils/errors"
 	swaggerui "github.com/keboola/keboola-as-code/third_party"
 )
 
 const (
 	ServiceName       = "templates-api"
+	ENVPrefix         = "TEMPLATES_"
 	ErrorNamePrefix   = "templates."
 	ExceptionIdPrefix = "keboola-templates-"
 )
 
 func main() {
-	if err := run(); err != nil {
-		fmt.Println(errors.PrefixError(err, "fatal error").Error()) // nolint:forbidigo
-		os.Exit(1)
-	}
+	entrypoint.Run(run, config.New(), entrypoint.Config{ENVPrefix: ENVPrefix})
 }
 
-func run() error {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+func run(ctx context.Context, cfg config.Config, _ []string) error {
+	// Create logger
+	logger := log.NewServiceLogger(os.Stdout, cfg.DebugLog) // nolint:forbidigo
 
-	// Load configuration.
-	envs, err := env.FromOs()
-	if err != nil {
-		return errors.Errorf("cannot load envs: %w", err)
-	}
-	cfg, err := config.LoadFrom(os.Args, envs)
-	if errors.Is(err, pflag.ErrHelp) {
-		// Stop on --help flag
-		return nil
-	} else if err != nil {
+	// Dump configuration, sensitive values are masked
+	dump, err := configmap.NewDumper().Dump(cfg).AsJSON(false)
+	if err == nil {
+		logger.Infof(ctx, "configuration: %s", string(dump))
+	} else {
 		return err
 	}
 
-	// Create logger.
-	logger := log.NewServiceLogger(os.Stderr, cfg.DebugLog).AddPrefix("[templatesApi]")
-	logger.Info("Configuration: ", cfg.Dump())
+	// Create process abstraction
+	proc := servicectx.New(servicectx.WithLogger(logger))
 
-	// Start CPU profiling, if enabled.
-	if cfg.CpuProfFilePath != "" {
-		stop, err := cpuprofile.Start(cfg.CpuProfFilePath, logger)
-		if err != nil {
-			return errors.Errorf(`cannot start cpu profiling: %w`, err)
+	// PProf profiler
+	if cfg.PProf.Enabled {
+		logger.Infof(ctx, `PProf profiler enabled, listening on %q`, cfg.PProf.Listen)
+		srv := pprof.NewHTTPServer(cfg.PProf.Listen)
+		go func() {
+			if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				logger.Errorf(ctx, `PProf HTTP server error: %s`, err)
+			}
+		}()
+		defer func() {
+			if err := srv.Close(); err != nil {
+				logger.Errorf(ctx, `cannot stop PProf HTTP server: %s`, err)
+			}
+		}()
+	}
+
+	// Datadog profiler
+	if cfg.Datadog.Enabled && cfg.Datadog.Profiler.Enabled {
+		logger.Infof(ctx, "Datadog profiler enabled")
+		if err := profiler.Start(profiler.WithProfileTypes(cfg.Datadog.Profiler.ProfilerTypes()...)); err != nil {
+			return err
 		}
-		defer stop()
-	}
-
-	// Create process abstraction.
-	proc, err := servicectx.New(ctx, cancel, servicectx.WithLogger(logger), servicectx.WithUniqueID(cfg.UniqueID))
-	if err != nil {
-		return err
+		defer profiler.Stop()
 	}
 
 	// Setup telemetry
 	tel, err := telemetry.New(
 		func() (trace.TracerProvider, error) {
-			if cfg.DatadogEnabled {
-				return telemetry.NewDDTracerProvider(
+			if cfg.Datadog.Enabled {
+				return datadog.NewTracerProvider(
 					logger, proc,
 					tracer.WithRuntimeMetrics(),
 					tracer.WithSamplingRules([]tracer.SamplingRule{tracer.RateRule(1.0)}),
 					tracer.WithAnalyticsRate(1.0),
-					tracer.WithDebugMode(cfg.DatadogDebug),
+					tracer.WithDebugMode(cfg.Datadog.Debug),
 				), nil
 			}
 			return nil, nil
 		},
 		func() (metric.MeterProvider, error) {
-			return prometheus.ServeMetrics(ctx, ServiceName, cfg.MetricsListenAddress, logger, proc)
+			return prometheus.ServeMetrics(ctx, cfg.Metrics, logger, proc, ServiceName)
 		},
 	)
 	if err != nil {
 		return err
 	}
 
-	// Create dependencies.
-	apiScp, err := dependencies.NewAPIScope(ctx, cfg, proc, logger, tel)
+	// Create dependencies
+	apiScp, err := dependencies.NewAPIScope(ctx, cfg, proc, logger, tel, os.Stdout, os.Stderr) // nolint:forbidigo
 	if err != nil {
 		return err
 	}
 
-	// Create service.
+	// Create service
 	svc, err := service.New(ctx, apiScp)
 	if err != nil {
 		return err
 	}
 
-	// Start HTTP server.
-	logger.Infof("starting Templates API HTTP server, listen-address=%s", cfg.ListenAddress)
-	err = httpserver.Start(apiScp, httpserver.Config{
-		ListenAddress:     cfg.ListenAddress,
+	// Start HTTP server
+	logger.Infof(ctx, "starting Templates API HTTP server, listen-address=%s", cfg.API.Listen)
+	err = httpserver.New(ctx, apiScp, httpserver.Config{
+		ListenAddress:     cfg.API.Listen,
 		ErrorNamePrefix:   ErrorNamePrefix,
 		ExceptionIDPrefix: ExceptionIdPrefix,
 		MiddlewareOptions: []middleware.Option{
@@ -148,15 +151,15 @@ func run() error {
 			// Mount endpoints
 			server.Mount(c.Muxer)
 			for _, m := range server.Mounts {
-				logger.Debugf("HTTP %q mounted on %s %s", m.Method, m.Verb, m.Pattern)
+				logger.Debugf(ctx, "HTTP %q mounted on %s %s", m.Method, m.Verb, m.Pattern)
 			}
 		},
-	})
+	}).Start(ctx)
 	if err != nil {
 		return err
 	}
 
-	// Wait for the service shutdown.
+	// Wait for the service shutdown
 	proc.WaitForShutdown()
 	return nil
 }

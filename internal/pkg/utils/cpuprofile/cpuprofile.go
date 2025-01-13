@@ -1,14 +1,15 @@
 package cpuprofile
 
 import (
+	"context"
 	"os"
 	"runtime/pprof"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/log"
 )
 
-func Start(filePath string, logger log.Logger) (stop func(), err error) {
-	logger = logger.AddPrefix("[cpu-profile]")
+func Start(ctx context.Context, filePath string, logger log.Logger) (stop func(), err error) {
+	logger = logger.WithComponent("cpu-profile")
 
 	f, err := os.Create(filePath) //nolint: forbidigo
 	if err != nil {
@@ -19,13 +20,13 @@ func Start(filePath string, logger log.Logger) (stop func(), err error) {
 		return nil, err
 	}
 
-	logger.Info("started")
+	logger.Info(ctx, "started")
 	return func() {
 		pprof.StopCPUProfile()
 		if err := f.Close(); err != nil { //nolint: forbidigo
-			logger.Error(err)
+			logger.Error(ctx, err.Error())
 			os.Exit(1)
 		}
-		logger.Info("stopped")
+		logger.Info(ctx, "stopped")
 	}, nil
 }

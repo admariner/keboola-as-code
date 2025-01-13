@@ -1,12 +1,14 @@
 package dialog
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/log"
 	"github.com/keboola/keboola-as-code/internal/pkg/model"
+	"github.com/keboola/keboola-as-code/internal/pkg/service/common/configmap"
 	"github.com/keboola/keboola-as-code/internal/pkg/template"
 	"github.com/keboola/keboola-as-code/internal/pkg/template/context/create"
 	"github.com/keboola/keboola-as-code/internal/pkg/template/input"
@@ -17,9 +19,9 @@ type inputsDialogDeps interface {
 	Components() *model.ComponentsMap
 }
 
-// askNewTemplateInputs - dialog to define user inputs for a new template.
+// AskNewTemplateInputs - dialog to define user inputs for a new template.
 // Used in AskCreateTemplateOpts.
-func (p *Dialogs) askNewTemplateInputs(deps inputsDialogDeps, branch *model.Branch, configs []*model.ConfigWithRows) (objectInputsMap, template.StepsGroups, error) {
+func (p *Dialogs) AskNewTemplateInputs(ctx context.Context, deps inputsDialogDeps, branch *model.Branch, configs []*model.ConfigWithRows, allInputs configmap.Value[bool]) (objectInputsMap, template.StepsGroups, error) {
 	// Create empty inputs map
 	inputs := input.NewInputsMap()
 
@@ -27,8 +29,7 @@ func (p *Dialogs) askNewTemplateInputs(deps inputsDialogDeps, branch *model.Bran
 	components := deps.Components()
 
 	// Select which config/row fields will be replaced by user input.
-	selectAllInputs := p.options.GetBool("all-inputs")
-	selectDialog, err := newInputsSelectDialog(p.Prompt, selectAllInputs, components, branch, configs, inputs)
+	selectDialog, err := newInputsSelectDialog(p.Prompt, allInputs.Value, components, branch, configs, inputs)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -38,13 +39,13 @@ func (p *Dialogs) askNewTemplateInputs(deps inputsDialogDeps, branch *model.Bran
 	}
 
 	// Define steps and steps groups for user inputs.
-	stepsGroups, err := newStepsDialog(p.Prompt).ask()
+	stepsGroups, err := newStepsDialog(p.Prompt).ask(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	// Define name/description for each user input and add inputs to steps groups.
-	stepsGroups, err = newInputsDetailsDialog(p.Prompt, inputs, stepsGroups).ask()
+	stepsGroups, err = newInputsDetailsDialog(p.Prompt, inputs, stepsGroups).ask(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -55,9 +56,9 @@ func (p *Dialogs) askNewTemplateInputs(deps inputsDialogDeps, branch *model.Bran
 type inputFields map[string]input.ObjectField
 
 func (f inputFields) Write(out *strings.Builder) {
-	var table []inputFieldLine
 	var inputIDMaxLength int
 	var fieldPathMaxLength int
+	table := make([]inputFieldLine, 0, len(f))
 
 	// Convert and get max lengths for padding
 	for _, field := range f {
@@ -121,7 +122,7 @@ func (v objectInputsMap) add(objectKey model.Key, inputDef create.InputDef) {
 	v[objectKey] = append(v[objectKey], inputDef)
 }
 
-func (v objectInputsMap) setTo(configs []create.ConfigDef) {
+func (v objectInputsMap) SetTo(configs []create.ConfigDef) {
 	for i := range configs {
 		c := &configs[i]
 		c.Inputs = v[c.Key]

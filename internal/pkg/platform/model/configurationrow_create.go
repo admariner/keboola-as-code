@@ -104,7 +104,7 @@ func (crc *ConfigurationRowCreate) Mutation() *ConfigurationRowMutation {
 // Save creates the ConfigurationRow in the database.
 func (crc *ConfigurationRowCreate) Save(ctx context.Context) (*ConfigurationRow, error) {
 	crc.defaults()
-	return withHooks[*ConfigurationRow, ConfigurationRowMutation](ctx, crc.sqlSave, crc.mutation, crc.hooks)
+	return withHooks(ctx, crc.sqlSave, crc.mutation, crc.hooks)
 }
 
 // SaveX calls Save and panics if Save returns an error.
@@ -193,7 +193,7 @@ func (crc *ConfigurationRowCreate) check() error {
 			return &ValidationError{Name: "id", err: fmt.Errorf(`model: validator failed for field "ConfigurationRow.id": %w`, err)}
 		}
 	}
-	if _, ok := crc.mutation.ParentID(); !ok {
+	if len(crc.mutation.ParentIDs()) == 0 {
 		return &ValidationError{Name: "parent", err: errors.New(`model: missing required edge "ConfigurationRow.parent"`)}
 	}
 	return nil
@@ -286,11 +286,15 @@ func (crc *ConfigurationRowCreate) createSpec() (*ConfigurationRow, *sqlgraph.Cr
 // ConfigurationRowCreateBulk is the builder for creating many ConfigurationRow entities in bulk.
 type ConfigurationRowCreateBulk struct {
 	config
+	err      error
 	builders []*ConfigurationRowCreate
 }
 
 // Save creates the ConfigurationRow entities in the database.
 func (crcb *ConfigurationRowCreateBulk) Save(ctx context.Context) ([]*ConfigurationRow, error) {
+	if crcb.err != nil {
+		return nil, crcb.err
+	}
 	specs := make([]*sqlgraph.CreateSpec, len(crcb.builders))
 	nodes := make([]*ConfigurationRow, len(crcb.builders))
 	mutators := make([]Mutator, len(crcb.builders))

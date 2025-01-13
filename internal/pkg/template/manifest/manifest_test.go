@@ -1,10 +1,12 @@
 package manifest
 
 import (
+	"context"
 	"testing"
 
 	"github.com/keboola/go-utils/pkg/wildcards"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem"
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem/aferofs"
@@ -39,22 +41,23 @@ func cases() []test {
 
 func TestLoadManifestFile(t *testing.T) {
 	t.Parallel()
+	ctx := context.Background()
 	for _, c := range cases() {
 		fs := aferofs.NewMemoryFs()
 
 		// Write file
 		path := Path()
-		assert.NoError(t, fs.WriteFile(filesystem.NewRawFile(path, c.jsonnet)))
+		require.NoError(t, fs.WriteFile(ctx, filesystem.NewRawFile(path, c.jsonnet)))
 
 		// Load
-		manifestFile, err := Load(fs)
+		manifestFile, err := Load(ctx, fs)
 		assert.NotNil(t, manifestFile)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		// Evaluate
-		manifest, err := manifestFile.Evaluate(nil)
+		manifest, err := manifestFile.Evaluate(context.Background(), nil)
 		assert.NotNil(t, manifest)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		// Assert
 		assert.Equal(t, c.records, manifest.records.All(), c.name)
@@ -64,18 +67,19 @@ func TestLoadManifestFile(t *testing.T) {
 
 func TestSaveManifestFile(t *testing.T) {
 	t.Parallel()
+	ctx := context.Background()
 	for _, c := range cases() {
 		fs := aferofs.NewMemoryFs()
 
 		// Save
 		manifest := New()
 		manifest.mainConfig = c.mainConfig
-		assert.NoError(t, manifest.records.SetRecords(c.records))
-		assert.NoError(t, manifest.Save(fs))
+		require.NoError(t, manifest.records.SetRecords(c.records))
+		require.NoError(t, manifest.Save(ctx, fs))
 
 		// Load file
-		file, err := fs.ReadFile(filesystem.NewFileDef(Path()))
-		assert.NoError(t, err)
+		file, err := fs.ReadFile(ctx, filesystem.NewFileDef(Path()))
+		require.NoError(t, err)
 		assert.Equal(t, wildcards.EscapeWhitespaces(c.jsonnet), wildcards.EscapeWhitespaces(file.Content), c.name)
 	}
 }

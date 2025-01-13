@@ -3,6 +3,7 @@ package dependencies
 import (
 	"context"
 	"net/http"
+	"os"
 	"testing"
 
 	"github.com/go-resty/resty/v2"
@@ -10,14 +11,17 @@ import (
 	"github.com/keboola/go-client/pkg/client"
 	"github.com/keboola/go-client/pkg/keboola"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"github.com/keboola/keboola-as-code/internal/pkg/env"
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem"
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem/aferofs"
 	"github.com/keboola/keboola-as-code/internal/pkg/log"
 	projectManifest "github.com/keboola/keboola-as-code/internal/pkg/project/manifest"
 	"github.com/keboola/keboola-as-code/internal/pkg/service/cli/dialog"
-	"github.com/keboola/keboola-as-code/internal/pkg/service/cli/options"
+	"github.com/keboola/keboola-as-code/internal/pkg/service/cli/flag"
 	nopPrompt "github.com/keboola/keboola-as-code/internal/pkg/service/cli/prompt/nop"
+	"github.com/keboola/keboola-as-code/internal/pkg/service/common/configmap"
 	"github.com/keboola/keboola-as-code/internal/pkg/service/common/servicectx"
 	"github.com/keboola/keboola-as-code/internal/pkg/utils/testapi"
 )
@@ -28,11 +32,9 @@ func TestDifferentProjectIdInManifestAndToken(t *testing.T) {
 	// Create manifest
 	fs := aferofs.NewMemoryFs()
 	manifestContent := `{"version": 2, "project": {"id": 789, "apiHost": "mocked.transport.http"}}`
-	assert.NoError(t, fs.WriteFile(filesystem.NewRawFile(projectManifest.Path(), manifestContent)))
+	require.NoError(t, fs.WriteFile(context.Background(), filesystem.NewRawFile(projectManifest.Path(), manifestContent)))
 
-	// Set token
-	opts := options.New()
-	opts.Set(options.StorageAPITokenOpt, "my-secret")
+	f := flag.DefaultGlobalFlags()
 
 	// Create http client
 	logger := log.NewNopLogger()
@@ -70,12 +72,12 @@ func TestDifferentProjectIdInManifestAndToken(t *testing.T) {
 
 	// Assert
 	ctx := context.Background()
-	proc := servicectx.NewForTest(t, ctx)
-	baseScp := newBaseScope(ctx, logger, proc, httpClient, fs, dialog.New(nopPrompt.New(), opts), opts)
-	localScp, err := newLocalCommandScope(baseScp)
-	assert.NoError(t, err)
-	_, err = newRemoteCommandScope(context.Background(), localScp)
-	expected := `given token is from the project "12345", but in manifest is defined project "789"`
-	assert.Error(t, err)
+	proc := servicectx.NewForTest(t)
+	baseScp := newBaseScope(ctx, logger, os.Stdout, os.Stderr, proc, httpClient, fs, dialog.New(nopPrompt.New()), f, env.Empty())
+	localScp, err := newLocalCommandScope(ctx, baseScp, configmap.NewValueWithOrigin("mocked.transport.http", configmap.SetByFlag))
+	require.NoError(t, err)
+	_, err = newRemoteCommandScope(ctx, localScp, configmap.NewValueWithOrigin("my-secret", configmap.SetByFlag))
+	expected := `provided token is from the project "12345", but in manifest is defined project "789"`
+	require.Error(t, err)
 	assert.Equal(t, expected, err.Error())
 }

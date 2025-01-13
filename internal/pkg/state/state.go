@@ -60,7 +60,7 @@ type ObjectsContainer interface {
 
 type dependencies interface {
 	Components() *model.ComponentsMap
-	KeboolaProjectAPI() *keboola.API
+	KeboolaProjectAPI() *keboola.AuthorizedAPI
 	Logger() log.Logger
 	Telemetry() telemetry.Telemetry
 }
@@ -81,7 +81,7 @@ func New(ctx context.Context, container ObjectsContainer, d dependencies) (s *St
 	// Create file loader
 	fileLoader := mapperInst.NewFileLoader(container.ObjectsRoot())
 
-	knownPaths, err := knownpaths.New(container.ObjectsRoot(), knownpaths.WithFilter(fileLoader.IsIgnored))
+	knownPaths, err := knownpaths.New(ctx, container.ObjectsRoot(), knownpaths.WithFilter(fileLoader.IsIgnored))
 	if err != nil {
 		return nil, errors.PrefixError(err, "error loading directory structure")
 	}
@@ -127,7 +127,7 @@ func (s *State) Load(ctx context.Context, options LoadOptions) (ok bool, localEr
 
 	// Remote
 	if options.LoadRemoteState {
-		s.logger.Debugf("Loading project remote state.")
+		s.logger.Debugf(ctx, "Loading project remote state.")
 		if err := s.loadRemoteState(ctx, options.RemoteFilter); err != nil {
 			remoteErrors.Append(err)
 		}
@@ -135,7 +135,7 @@ func (s *State) Load(ctx context.Context, options LoadOptions) (ok bool, localEr
 
 	// Local
 	if options.LoadLocalState {
-		s.logger.Debugf("Loading local state.")
+		s.logger.Debugf(ctx, "Loading local state.")
 		if err := s.loadLocalState(ctx, options.LocalFilter, options.IgnoreNotFoundErr); err != nil {
 			localErrors.Append(err)
 		}
@@ -229,7 +229,7 @@ func (s *State) validateRemote(ctx context.Context) (err error) {
 	return errs.ErrorOrNil()
 }
 
-func (s *State) ValidateValue(value interface{}) error {
+func (s *State) ValidateValue(value any) error {
 	return s.validator.ValidateCtx(s.Ctx(), value, "dive", "")
 }
 

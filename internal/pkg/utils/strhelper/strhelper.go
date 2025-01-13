@@ -91,11 +91,11 @@ func StripHTMLComments(str string) string {
 		})
 }
 
-func Truncate(str string, max int, suffix string) string {
-	if len(str) <= max {
+func Truncate(str string, maximum int, suffix string) string {
+	if len(str) <= maximum {
 		return str
 	}
-	return str[0:max] + suffix
+	return str[0:maximum] + suffix
 }
 
 // NormalizeName converts any string into kebab-case.
@@ -148,7 +148,7 @@ func MustURLPathUnescape(in string) string {
 	return out
 }
 
-func ReplacePlaceholders(path string, placeholders map[string]interface{}) string {
+func ReplacePlaceholders(path string, placeholders map[string]any) string {
 	for key, value := range placeholders {
 		path = strings.ReplaceAll(path, "{"+key+"}", cast.ToString(value))
 	}
@@ -166,7 +166,7 @@ func AsSentence(msg string) string {
 
 	// Dot is added to the end, if message doesn't end with a special character.
 	if regexpcache.MustCompile(`[a-zA-Z0-9'"]$`).MatchString(out) {
-		out = out + "."
+		out += "."
 	}
 	return out
 }

@@ -66,7 +66,7 @@ func New(ctx context.Context, d dependencies, defaultRepositories []model.Templa
 		ctx:                 ctx,
 		deps:                d,
 		logger:              d.Logger(),
-		syncMeter:           d.Telemetry().Meter().Histogram("keboola.go.templates.repo.sync.duration", "Templates repository sync duration.", "ms"),
+		syncMeter:           d.Telemetry().Meter().FloatHistogram("keboola.go.templates.repo.sync.duration", "Templates repository sync duration.", "ms"),
 		defaultRepositories: defaultRepositories,
 		repositories:        make(map[string]*CachedRepository),
 		repositoriesInit:    &singleflight.Group{},
@@ -74,8 +74,8 @@ func New(ctx context.Context, d dependencies, defaultRepositories []model.Templa
 	}
 
 	// Free all repositories on server shutdown
-	d.Process().OnShutdown(func() {
-		m.Free()
+	d.Process().OnShutdown(func(ctx context.Context) {
+		m.Free(ctx)
 	})
 
 	// Init default repositories in parallel.
@@ -83,7 +83,6 @@ func New(ctx context.Context, d dependencies, defaultRepositories []model.Templa
 	errs := errors.NewMultiError()
 	initWg := &sync.WaitGroup{}
 	for _, repo := range defaultRepositories {
-		repo := repo
 		initWg.Add(1)
 		go func() {
 			defer initWg.Done()
@@ -169,7 +168,7 @@ func (m *Manager) Update(ctx context.Context) <-chan error {
 				m.repositoriesLock.Unlock()
 
 				// Free previous value
-				oldValue.free()
+				oldValue.free(ctx)
 			}
 		}()
 	}
@@ -186,22 +185,21 @@ func (m *Manager) Update(ctx context.Context) <-chan error {
 	return errorCh
 }
 
-func (m *Manager) Free() {
+func (m *Manager) Free(ctx context.Context) {
 	m.repositoriesLock.RLock()
 	defer m.repositoriesLock.RUnlock()
 
 	wg := &sync.WaitGroup{}
 	for _, repo := range m.repositories {
-		repo := repo
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			<-repo.free()
+			<-repo.free(ctx)
 		}()
 	}
 
 	wg.Wait()
-	m.logger.Infof("repository manager cleaned up")
+	m.logger.Infof(ctx, "repository manager cleaned up")
 }
 
 func (m *Manager) repository(ctx context.Context, ref model.TemplateRepository) (*CachedRepository, error) {
@@ -238,7 +236,7 @@ func (m *Manager) repository(ctx context.Context, ref model.TemplateRepository) 
 		if ref.Type == model.RepositoryTypeGit {
 			// Remote repository
 			startTime := time.Now()
-			m.logger.Infof(`checking out repository "%s:%s"`, ref.URL, ref.Ref)
+			m.logger.Infof(ctx, `checking out repository "%s:%s"`, ref.URL, ref.Ref)
 
 			// Checkout
 			gitRepo, err = checkoutOp.Run(ctx, ref, m.deps)
@@ -247,7 +245,7 @@ func (m *Manager) repository(ctx context.Context, ref model.TemplateRepository) 
 			}
 
 			// Checkout done
-			m.logger.Infof(`checked out repository "%s" | %s`, gitRepo, time.Since(startTime))
+			m.logger.WithDuration(time.Since(startTime)).Infof(ctx, `checked out repository "%s"`, gitRepo)
 		} else {
 			// Local directory
 			fs, err := aferofs.NewLocalFs(ref.URL, filesystem.WithLogger(m.deps.Logger()))
@@ -255,7 +253,7 @@ func (m *Manager) repository(ctx context.Context, ref model.TemplateRepository) 
 				return nil, err
 			}
 			gitRepo = git.NewLocalRepository(ref, fs)
-			m.logger.Infof(`found local repository "%s"`, gitRepo)
+			m.logger.Infof(ctx, `found local repository "%s"`, gitRepo)
 		}
 
 		// Load content of the template repository

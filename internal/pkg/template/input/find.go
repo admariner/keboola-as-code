@@ -27,7 +27,7 @@ type ObjectField struct {
 // Find potential user inputs in config or config row.
 func Find(objectKey model.Key, component *keboola.Component, content *orderedmap.OrderedMap) []ObjectField {
 	var out []ObjectField
-	content.VisitAllRecursive(func(fieldPath orderedmap.Path, value interface{}, parent interface{}) {
+	content.VisitAllRecursive(func(fieldPath orderedmap.Path, value any, parent any) {
 		// Root key must be "parameters"
 		if len(fieldPath) < 2 || fieldPath.First() != orderedmap.MapStep("parameters") {
 			return
@@ -46,7 +46,7 @@ func Find(objectKey model.Key, component *keboola.Component, content *orderedmap
 		var inputType Type
 		var inputKind Kind
 		var inputOptions Options
-		var defaultValue interface{}
+		var defaultValue any
 		isSecret := keboola.IsKeyToEncrypt(string(fieldKey))
 		valRef := reflect.ValueOf(value)
 		switch valRef.Kind() {
@@ -94,7 +94,7 @@ func Find(objectKey model.Key, component *keboola.Component, content *orderedmap
 			inputType = TypeStringArray
 			inputKind = KindMultiSelect
 			// Each element must be string
-			for i := 0; i < valRef.Len(); i++ {
+			for i := range valRef.Len() {
 				item := valRef.Index(i)
 				// Unwrap interface
 				if item.Type().Kind() == reflect.Interface {

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/env"
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem"
@@ -31,30 +32,32 @@ func TestTemplatesApiE2E(t *testing.T) {
 	}
 
 	binaryPath := testhelper.CompileBinary(t, "templates-api", "build-templates-api")
+	ctx := context.Background()
 
 	runner.
 		NewRunner(t).
 		ForEachTest(func(test *runner.Test) {
 			var repositories string
-			if test.TestDirFS().Exists("repository") {
+			if test.TestDirFS().Exists(ctx, "repository") {
 				repositories = fmt.Sprintf("keboola|file://%s", filepath.Join(test.TestDirFS().BasePath(), "repository"))
 			} else {
-				repositories = "keboola|https://github.com/keboola/keboola-as-code-templates.git|main"
+				repositories = "keboola|https://github.com/keboola/keboola-as-code-templates.git|main;keboola-components|https://github.com/keboola/keboola-as-code-templates-components.git|main"
 			}
 			addArgs := []string{fmt.Sprintf("--repositories=%s", repositories)}
 
 			// Connect to the etcd
-			etcdCredentials := etcdhelper.TmpNamespaceFromEnv(t, "TEMPLATES_API_ETCD_")
-			etcdClient := etcdhelper.ClientForTest(t, etcdCredentials)
+			etcdCfg := etcdhelper.TmpNamespaceFromEnv(t, "TEMPLATES_ETCD_")
+			etcdClient := etcdhelper.ClientForTest(t, etcdCfg)
 
 			addEnvs := env.FromMap(map[string]string{
-				"TEMPLATES_API_DATADOG_ENABLED":  "false",
-				"TEMPLATES_API_STORAGE_API_HOST": test.TestProject().StorageAPIHost(),
-				"TEMPLATES_API_ETCD_NAMESPACE":   etcdCredentials.Namespace,
-				"TEMPLATES_API_ETCD_ENDPOINT":    etcdCredentials.Endpoint,
-				"TEMPLATES_API_ETCD_USERNAME":    etcdCredentials.Username,
-				"TEMPLATES_API_ETCD_PASSWORD":    etcdCredentials.Password,
-				"TEMPLATES_API_PUBLIC_ADDRESS":   "https://templates.keboola.local",
+				"TEMPLATES_DATADOG_ENABLED":  "false",
+				"TEMPLATES_NODE_ID":          "test-node",
+				"TEMPLATES_STORAGE_API_HOST": test.TestProject().StorageAPIHost(),
+				"TEMPLATES_ETCD_NAMESPACE":   etcdCfg.Namespace,
+				"TEMPLATES_ETCD_ENDPOINT":    etcdCfg.Endpoint,
+				"TEMPLATES_ETCD_USERNAME":    etcdCfg.Username,
+				"TEMPLATES_ETCD_PASSWORD":    etcdCfg.Password,
+				"TEMPLATES_API_PUBLIC_URL":   "https://templates.keboola.local",
 			})
 
 			requestDecoratorFn := func(request *runner.APIRequestDef) {
@@ -69,7 +72,8 @@ func TestTemplatesApiE2E(t *testing.T) {
 						Get("/v1/project/default/instances")
 
 					instances := result["instances"].([]any)
-					if assert.NoError(t, err) && assert.Equal(t, 1, len(instances)) {
+					require.NoError(t, err)
+					if assert.Len(t, instances, 1) {
 						instanceId := instances[0].(map[string]any)["instanceId"].(string)
 						request.Path = strings.ReplaceAll(request.Path, instanceIDPlaceholder, instanceId)
 					}
@@ -89,13 +93,13 @@ func TestTemplatesApiE2E(t *testing.T) {
 			)
 
 			// Write current etcd KVs
-			etcdDump, err := etcdhelper.DumpAllToString(context.Background(), etcdClient)
-			assert.NoError(test.T(), err)
-			assert.NoError(test.T(), test.WorkingDirFS().WriteFile(filesystem.NewRawFile("actual-etcd-kvs.txt", etcdDump)))
+			etcdDump, err := etcdhelper.DumpAllToString(ctx, etcdClient)
+			require.NoError(test.T(), err)
+			require.NoError(test.T(), test.WorkingDirFS().WriteFile(ctx, filesystem.NewRawFile("actual-etcd-kvs.txt", etcdDump)))
 
 			// Assert current etcd state against expected state.
 			expectedEtcdKVsPath := "expected-etcd-kvs.txt"
-			if test.TestDirFS().IsFile(expectedEtcdKVsPath) {
+			if test.TestDirFS().IsFile(ctx, expectedEtcdKVsPath) {
 				// Compare expected and actual kvs
 				etcdhelper.AssertKVsString(test.T(), etcdClient, test.ReadFileFromTestDir(expectedEtcdKVsPath))
 			}

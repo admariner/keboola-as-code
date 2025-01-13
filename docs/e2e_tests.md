@@ -8,18 +8,15 @@ E2E tests are divided by the service they test.
 - **Templates API**
   - Location: [`test/templates/api`](../test/templates/api)
   - Run the tests: `make tests-templates-api"`
-- **Buffer API**
-  - Location: [`test/buffer/api`](../test/buffer/api)
-  - Run the tests: `make tests-buffer-api"`
-- **Buffer Worker**
-  - Location: [`test/buffer/worker`](../test/buffer/worker)
-  - Run the tests: `make tests-buffer-worker`
+- **Stream API**
+  - Location: [`test/stream/api`](../test/stream/api)
+  - Run the tests: `make tests-stream-api"`
 
 Tests for each service are grouped according to a common functionality they test. Then each directory in this group 
 contains a single test.
 
 Example of single test directories:
-- `test/buffer/api/exports/create`
+- `test/stream/api/exports/create`
 - `test/cli/create/branch`
 
 ## Test Directory Structure
@@ -70,6 +67,8 @@ Contain a snapshot of a project before or after the operations run in the test.
 - `buckets` - List of all buckets and their tables in the project.
 - `sandboxes` - List of all workspaces.
 - `schedules` - List of all schedules.
+- `backend` - Backend that the tests should run on only. Test fails when backend in TEST_KBC_PROJECTS has incompatible backend.
+- `legacyTransformation` - Boolean indication that the stack supports legacyTransformation. For `gcp` stack the legacyTransformation has to be set always to `false`.
 - `branches/.../configs` - List of all configs (by filename without extension) available in a branch. They are created from fixtures defined in [internal/pkg/fixtures/configs](https://github.com/keboola/keboola-as-code/tree/main/internal/pkg/fixtures/configs). The `name` field of the fixture is used to generate an environment variable which contains the ID of the config, e.g. `%%TEST_BRANCH_MAIN_CONFIG_EMPTY_ID%%` where `MAIN` is the branch, and `EMPTY` is the name.
   - You can get a list of the generated environment variables by running the test with `TEST_VERBOSE=true`, e.g. `TEST_VERBOSE=true TEST_PACKAGE=./test/cli/... bash ./scripts/tests.sh -run TestCliE2E/job`
 
@@ -77,6 +76,10 @@ Example:
 
 ```json
 {
+  "backend": {
+    "type": "snowflake"
+  },
+  "legacyTransformation": true,
   "branches": [
     {
       "branch": {
@@ -152,7 +155,7 @@ Example:
 < Please enter Keboola Storage API token. The value will be hidden.
 > %%TEST_KBC_STORAGE_API_TOKEN%%
 
-< Please select which project's branches you want to use with this CLI.
+< Please select project's branches you want to use with this CLI.
 # Select all branches
 > <down arrow>
 > <enter>
@@ -178,7 +181,7 @@ Format:
 
 ## Polling for tasks
 
-**Supported only in Buffer API tests.**
+**Supported only in Stream API tests.**
 
 `Path` supports reference to previous request's response. The reference is in the format `<<001-create:response.url>>` where `001-create` is the name of the request and `url` is the path to the value in the `response`. The referenced URL will be stripped of the hostname so that it will be relative to the API server.
 
@@ -206,7 +209,7 @@ Format:
 
 ## `initial-etcd-kvs.txt` and `expected-etcd-kvs.txt`
 
-**Supported only in Buffer API tests.**
+**Supported only in Stream API tests.**
 
 Format:
 
@@ -250,12 +253,31 @@ Wildcards can be used in `/expected-stdout`, `/expected-stderr` and `/out/*.*` f
 - `%c`: A single character of any sort.
 - `%%`: A literal percent character: %.
 
-Inspired by [PhpUnit](https://docs.phpunit.de/en/10.0/assertions.html#assertstringmatchesformat).
+Inspired by [PhpUnit](https://docs.phpunit.de/en/11.4/assertions.html#assertstringmatchesformat).
 
 ## Environment Placeholders
+
 Environment placeholders can be used in `/expected-stdout`, `/expected-stderr`, `/in/*.*` and `/out/*.*`.
 
 E.g. `%%TEST_STORAGE_API_HOST%%` will be replaced with a value of the ENV variable `TEST_STORAGE_API_HOST`.
+
+## Project locking
+
+Currently there is implemented project locking using `flock`.
+
+When environment variables are set, it can be change into locking mechanism using `redis`.
+
+```
+TEST_KBC_PROJECTS_LOCK_HOST=redis://redis:6379
+TEST_KBC_PROJECTS_LOCK_PASSWORD=password
+```
+
+This is sample example how to setup environment variables to turn on `redis` locking within the project. Current configuration is without TLS, but it is expected to use TLS in production.
+
+To enable tls use the `TEST_KBC_PROJECTS_LOCK_HOST` with `+tls`.
+```
+TEST_KBC_PROJECTS_LOCK_HOST=redis+tls://redis:6380
+```
 
 ## Generate new unique ID
 

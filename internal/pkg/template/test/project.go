@@ -2,17 +2,19 @@ package test
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"strconv"
 
-	"github.com/benbjohnson/clock"
+	"github.com/jonboulle/clockwork"
 	"github.com/keboola/go-client/pkg/client"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/env"
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem"
+	"github.com/keboola/keboola-as-code/internal/pkg/filesystem/aferofs"
 	fixtures "github.com/keboola/keboola-as-code/internal/pkg/fixtures/local"
 	"github.com/keboola/keboola-as-code/internal/pkg/log"
 	"github.com/keboola/keboola-as-code/internal/pkg/project"
-	"github.com/keboola/keboola-as-code/internal/pkg/service/cli/options"
 	dependenciesPkg "github.com/keboola/keboola-as-code/internal/pkg/service/common/dependencies"
 	"github.com/keboola/keboola-as-code/internal/pkg/service/common/servicectx"
 	"github.com/keboola/keboola-as-code/internal/pkg/telemetry"
@@ -26,15 +28,25 @@ type Dependencies struct {
 	dependenciesPkg.ProjectScope
 }
 
-func PrepareProjectFS(testPrj *testproject.Project, branchID int) (filesystem.Fs, error) {
+func PrepareProjectFS(ctx context.Context, testPrj *testproject.Project, branchID int) (filesystem.Fs, error) {
 	envs := env.Empty()
 	envs.Set("TEST_KBC_STORAGE_API_HOST", testPrj.StorageAPIHost())
 	envs.Set("LOCAL_PROJECT_ID", strconv.Itoa(testPrj.ID()))
 	envs.Set("LOCAL_STATE_MAIN_BRANCH_ID", strconv.Itoa(branchID))
-	return fixtures.LoadFS("empty-branch", envs)
+	return fixtures.LoadFS(ctx, "empty-branch", envs)
 }
 
-func PrepareProject(ctx context.Context, logger log.Logger, tel telemetry.Telemetry, proc *servicectx.Process, branchID int, remote bool) (*project.State, *testproject.Project, *Dependencies, testproject.UnlockFn, error) {
+func PrepareProject(
+	ctx context.Context,
+	logger log.Logger,
+	tel telemetry.Telemetry,
+	path string,
+	stdout io.Writer,
+	stderr io.Writer,
+	proc *servicectx.Process,
+	branchID int,
+	remote bool,
+) (*project.State, *testproject.Project, *Dependencies, testproject.UnlockFn, error) {
 	// Get OS envs
 	envs, err := env.FromOs()
 	if err != nil {
@@ -42,12 +54,12 @@ func PrepareProject(ctx context.Context, logger log.Logger, tel telemetry.Teleme
 	}
 
 	// Get a test project
-	testPrj, unlockFn, err := testproject.GetTestProject(envs)
+	testPrj, unlockFn, err := testproject.GetTestProject(path, envs)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
 
-	testDeps, err := newTestDependencies(ctx, logger, tel, proc, testPrj.StorageAPIHost(), testPrj.StorageAPIToken().Token)
+	testDeps, err := newTestDependencies(ctx, logger, tel, stdout, stderr, proc, testPrj.StorageAPIHost(), testPrj.StorageAPIToken().Token)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
@@ -72,18 +84,14 @@ func PrepareProject(ctx context.Context, logger log.Logger, tel telemetry.Teleme
 	}
 
 	// Load fixture with minimal project
-	prjFS, err := PrepareProjectFS(testPrj, branchID)
+	prjFS, err := createEmptyBranch(ctx, testPrj, branchID)
 	if err != nil {
 		unlockFn()
 		return nil, nil, nil, nil, err
 	}
 
-	opts := options.New()
-	opts.Set(`storage-api-host`, testPrj.StorageAPIHost())
-	opts.Set(`storage-api-token`, testPrj.StorageAPIToken().Token)
-
 	// Load project state
-	prj, err := project.New(ctx, prjFS, true)
+	prj, err := project.New(ctx, log.NewNopLogger(), prjFS, env.Empty(), true)
 	if err != nil {
 		unlockFn()
 		return nil, nil, nil, nil, err
@@ -105,8 +113,17 @@ func PrepareProject(ctx context.Context, logger log.Logger, tel telemetry.Teleme
 	return prjState, testPrj, testDeps, unlockFn, nil
 }
 
-func newTestDependencies(ctx context.Context, logger log.Logger, tel telemetry.Telemetry, proc *servicectx.Process, apiHost, apiToken string) (*Dependencies, error) {
-	baseDeps := dependenciesPkg.NewBaseScope(ctx, logger, tel, clock.New(), proc, client.NewTestClient())
+func newTestDependencies(
+	ctx context.Context,
+	logger log.Logger,
+	tel telemetry.Telemetry,
+	stdout io.Writer,
+	stderr io.Writer,
+	proc *servicectx.Process,
+	apiHost,
+	apiToken string,
+) (*Dependencies, error) {
+	baseDeps := dependenciesPkg.NewBaseScope(ctx, logger, tel, stdout, stderr, clockwork.NewRealClock(), proc, client.NewTestClient())
 	publicDeps, err := dependenciesPkg.NewPublicScope(ctx, baseDeps, apiHost, dependenciesPkg.WithPreloadComponents(true))
 	if err != nil {
 		return nil, err
@@ -126,4 +143,65 @@ func newTestDependencies(ctx context.Context, logger log.Logger, tel telemetry.T
 		PublicScope:  publicDeps,
 		ProjectScope: projectDeps,
 	}, nil
+}
+
+// This function creates files in memory for testing templates:
+// .keboola/manifest.json
+// main/description
+// main/meta.json.
+func createEmptyBranch(ctx context.Context, prj *testproject.Project, branchID int) (filesystem.Fs, error) {
+	prjFS := aferofs.NewMemoryFs()
+	err := prjFS.WriteFile(ctx, filesystem.NewRawFile(".keboola/manifest.json", getManifest(prj, branchID)))
+	if err != nil {
+		return nil, err
+	}
+
+	err = prjFS.WriteFile(ctx, filesystem.NewRawFile("main/meta.json", `{"name": "Main","isDefault": true}`))
+	if err != nil {
+		return nil, err
+	}
+
+	err = prjFS.WriteFile(ctx, filesystem.NewRawFile("main/description.md", ""))
+	if err != nil {
+		return nil, err
+	}
+	return prjFS, nil
+}
+
+func getManifest(prj *testproject.Project, branchID int) string {
+	return fmt.Sprintf(`{
+  "version": 2,
+  "project": {
+    "id": %d,
+    "apiHost": "%s"
+  },
+  "templates": {
+    "repositories": [
+      {
+        "type": "dir",
+        "name": "keboola",
+        "url": "../repository"
+      }
+    ]
+  },
+  "naming": {
+    "branch": "{branch_name}",
+    "config": "{component_type}/{component_id}/{config_name}",
+    "configRow": "rows/{config_row_name}",
+    "schedulerConfig": "schedules/{config_name}",
+    "sharedCodeConfig": "_shared/{target_component_id}",
+    "sharedCodeConfigRow": "codes/{config_row_name}",
+    "variablesConfig": "variables",
+    "variablesValuesRow": "values/{config_row_name}",
+    "dataAppConfig": "app/{component_id}/{config_name}"
+  },
+  "branches": [
+    {
+      "id": %d,
+      "path": "main"
+    }
+  ],
+  "configurations": []
+}
+`, prj.ID(), prj.StorageAPIHost(), branchID)
 }

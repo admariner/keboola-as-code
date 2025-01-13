@@ -2,25 +2,24 @@ name: "E2E: Templates"
 
 on:
   workflow_call:
+    inputs:
+      without-cache:
+        type: boolean
+        default: false
+        required: false
 
 env:
-  GO_VERSION: 1.19.3
-  TEST_PARALLELISM: 4
+  TEST_PARALLELISM: 16
   TEST_PARALLELISM_PKG: 1
-  TEST_KBC_PROJECTS: |
-    [
-      {"host":"connection.keboola.com","project":8768,"stagingStorage":"s3","token":"${{ secrets.TEST_KBC_PROJECT_8768_TOKEN }}"},
-      {"host":"connection.keboola.com","project":8776,"stagingStorage":"s3","token":"${{ secrets.TEST_KBC_PROJECT_8776_TOKEN }}"},
-      {"host":"connection.north-europe.azure.keboola.com","project":10899,"stagingStorage":"abs","token":"${{ secrets.TEST_KBC_PROJECT_10899_TOKEN }}"},
-      {"host":"connection.north-europe.azure.keboola.com","project":10905,"stagingStorage":"abs","token":"${{ secrets.TEST_KBC_PROJECT_10905_TOKEN }}"}
-    ]
+
+# Required for aws-actions/configure-aws-credentials using OIDC, assume role
+permissions:
+  id-token: write
+  contents: read 
 
 jobs:
   test:
     name: test
-    concurrency:
-      group: tests-e2e-service-templates
-      cancel-in-progress: false
     strategy:
       fail-fast: false
     runs-on: ubuntu-latest
@@ -28,39 +27,75 @@ jobs:
       - name: Setup line endings
         run: git config --global core.autocrlf false
 
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - name: Change default TEST_COVERAGE when on main branch
+        if: github.ref == 'refs/heads/main'
+        run: echo "TEST_COVERAGE=true" >> $GITHUB_ENV
 
-      - name: Install Go
-        uses: actions/setup-go@v3
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go, tools and caching
+        uses: ./.github/actions/go-setup
         with:
-          go-version: ${{ env.GO_VERSION }}
+          build-type: e2e-tests-templates
+          without-cache: ${{ inputs.without-cache }}
+          cache-s3-bucket: ${{ vars.CACHE_S3_BUCKET }}
 
-      - name: Load Go cache
-        uses: ./.github/actions/go-cache
+      - name: Set TEST_KBC_PROJECTS_FILE entries
+        uses: ./.github/actions/export-kbc-projects
         with:
-          key: e2e
-
-      - name: Install tools
-        run: . ./scripts/tools.sh
-        shell: bash
+          secrets: ${{ toJSON(secrets) }}
 
       - name: Start etcd database
         run: |
           set -Eeuo pipefail
-          docker-compose run -d --rm --publish 2379:2379 etcd
+          docker compose run -d --rm --publish 2379:2379 etcd
           sudo echo "127.0.0.1 etcd" | sudo tee -a /etc/hosts
 
-      - name: Run tests
-        run: make tests-templates-api
+      - name: Run E2E tests
         shell: bash
+        run: |
+          set -eo pipefail
+          
+          # Build binary for test without external inputs
+          env -i  \
+            TERM="$TERM" \
+            HOME="$HOME" \
+            PATH="$PATH" \
+            BUILD_TARGET_PATH="$TEST_BINARY_TEMPLATES_API" \
+          make build-templates-api
+          touch -d '1970-01-01T00:00:01' "$TEST_BINARY_TEMPLATES_API"
+          
+          # Calculate binary hash, it invalidates tests cache
+          export TEST_BINARY_TEMPLATES_API_HASH=`cat "$TEST_BINARY_TEMPLATES_API" | $MD5_COMMAND | cut -d " " -f1`
+          echo "Binary hash: $TEST_BINARY_TEMPLATES_API_HASH"
+          
+          # ENVs can affect test caching, make sure to only run tests with expected ENVs
+          env -i  \
+            TERM="$TERM" \
+            HOME="$HOME" \
+            PATH="$PATH" \
+            DATADOG_ENABLED="false" \
+            TEMPLATES_ETCD_ENDPOINT="etcd:2379" \
+            TEMPLATES_ETCD_USERNAME="root" \
+            TEMPLATES_ETCD_PASSWORD="toor" \
+            TEST_BINARY_TEMPLATES_API="$TEST_BINARY_TEMPLATES_API" \
+            TEST_BINARY_TEMPLATES_API_HASH="$TEST_BINARY_TEMPLATES_API_HASH" \
+            TEST_PARALLELISM="$TEST_PARALLELISM" \
+            TEST_PARALLELISM_PKG="$TEST_PARALLELISM_PKG" \
+            TEST_COVERAGE="false" \
+            TEST_CREATE_OUT_DIR="false" \
+            TEST_KBC_PROJECTS_LOCK_HOST="$TEST_KBC_PROJECTS_LOCK_HOST" \
+            TEST_KBC_PROJECTS_LOCK_PASSWORD="$TEST_KBC_PROJECTS_LOCK_PASSWORD" \
+            TEST_KBC_PROJECTS_FILE="$TEST_KBC_PROJECTS_FILE" \
+          make tests-templates-api
         env:
-          TEMPLATES_API_ETCD_ENDPOINT: etcd:2379
-          TEMPLATES_API_ETCD_USERNAME: root
-          TEMPLATES_API_ETCD_PASSWORD: toor
-          TEMPLATES_API_ETCD_NAMESPACE: templates-api
+          TEST_BINARY_TEMPLATES_API: "${{ runner.temp }}/test-build-templates-api"
+          TEST_KBC_PROJECTS_LOCK_HOST: ${{ vars.TEST_KBC_PROJECTS_LOCK_HOST }}
+          TEST_KBC_PROJECTS_LOCK_PASSWORD: ${{ secrets.TEST_KBC_PROJECTS_LOCK_PASSWORD }}
+          TEST_KBC_PROJECTS_FILE: '${{ github.workspace }}/${{ vars.TEST_KBC_PROJECTS_FILE }}'
 
       - name: Validate OpenAPI3 definition
-        uses: char0n/swagger-editor-validate@v1
+        uses: swaggerexpert/swagger-editor-validate@v1
         with:
           definition-file: internal/pkg/service/templates/api/openapi/openapi3.yaml

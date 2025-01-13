@@ -3,6 +3,7 @@ package load
 import (
 	"context"
 
+	"github.com/keboola/keboola-as-code/internal/pkg/env"
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem"
 	"github.com/keboola/keboola-as-code/internal/pkg/log"
 	"github.com/keboola/keboola-as-code/internal/pkg/project"
@@ -16,6 +17,7 @@ type Options struct {
 type dependencies interface {
 	Logger() log.Logger
 	Telemetry() telemetry.Telemetry
+	Environment() env.Provider
 }
 
 func Run(ctx context.Context, fs filesystem.Fs, o Options, d dependencies) (m *project.Manifest, err error) {
@@ -24,11 +26,11 @@ func Run(ctx context.Context, fs filesystem.Fs, o Options, d dependencies) (m *p
 
 	logger := d.Logger()
 
-	m, err = project.LoadManifest(fs, o.IgnoreErrors)
+	m, err = project.LoadManifest(ctx, d.Logger(), fs, d.Environment(), o.IgnoreErrors)
 	if err != nil {
 		return nil, err
 	}
 
-	logger.Debugf(`Project manifest loaded.`)
+	logger.Debugf(ctx, `Project manifest loaded.`)
 	return m, nil
 }

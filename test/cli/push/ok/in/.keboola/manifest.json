@@ -4,6 +4,7 @@
     "id": %%TEST_KBC_PROJECT_ID%%,
     "apiHost": "%%TEST_KBC_STORAGE_API_HOST%%"
   },
+  "allowTargetEnv": false,
   "sortBy": "path",
   "naming": {
     "branch": "{branch_name}",
@@ -99,18 +100,6 @@
       "id": "%%TEST_BRANCH_FOO_CONFIG_WITHOUT_ROWS_ID%%",
       "path": "extractor/ex-generic-v2/without-rows",
       "rows": []
-    },
-    {
-      "branchId": %%TEST_BRANCH_FOO_ID%%,
-      "componentId": "transformation",
-      "id": "%%TEST_BRANCH_FOO_CONFIG_OLD_TRANSFORMATION_ID%%",
-      "path": "other/transformation/old-transformation",
-      "rows": [
-        {
-          "id": "%%TEST_BRANCH_FOO_CONFIG_OLD_TRANSFORMATION_ROW_OLD_TRANSFORMATION_SNFK_ID%%",
-          "path": "rows/old-transformation-snfk"
-        }
-      ]
     },
     {
       "branchId": %%TEST_BRANCH_MAIN_ID%%,

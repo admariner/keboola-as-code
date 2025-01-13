@@ -30,7 +30,7 @@
 // Dependencies containers for services are in separate packages
 //   - [pkg/github.com/keboola/keboola-as-code/internal/pkg/service/cli/dependencies]
 //   - [pkg/github.com/keboola/keboola-as-code/internal/pkg/service/templates/dependencies]
-//   - [pkg/github.com/keboola/keboola-as-code/internal/pkg/service/buffer/dependencies]
+//   - [pkg/github.com/keboola/keboola-as-code/internal/pkg/service/stream/dependencies]
 //
 // Example of difference between CLI and API dependencies implementations:
 //   - In the CLI the Storage API token is read from ENV or flag.
@@ -56,25 +56,26 @@ package dependencies
 
 import (
 	"context"
-	"net"
+	"io"
 	"net/http"
 
-	"github.com/benbjohnson/clock"
 	"github.com/jarcoal/httpmock"
+	"github.com/jonboulle/clockwork"
 	"github.com/keboola/go-client/pkg/client"
 	"github.com/keboola/go-client/pkg/keboola"
+	"github.com/keboola/go-cloud-encrypt/pkg/cloudencrypt"
 	etcdPkg "go.etcd.io/etcd/client/v3"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem"
 	"github.com/keboola/keboola-as-code/internal/pkg/log"
 	"github.com/keboola/keboola-as-code/internal/pkg/model"
 	projectPkg "github.com/keboola/keboola-as-code/internal/pkg/project"
+	"github.com/keboola/keboola-as-code/internal/pkg/service/common/distlock"
 	distributionPkg "github.com/keboola/keboola-as-code/internal/pkg/service/common/distribution"
 	"github.com/keboola/keboola-as-code/internal/pkg/service/common/etcdclient"
 	"github.com/keboola/keboola-as-code/internal/pkg/service/common/etcdop/serde"
 	"github.com/keboola/keboola-as-code/internal/pkg/service/common/servicectx"
 	taskPkg "github.com/keboola/keboola-as-code/internal/pkg/service/common/task"
-	orchestratorPkg "github.com/keboola/keboola-as-code/internal/pkg/service/common/task/orchestrator"
 	"github.com/keboola/keboola-as-code/internal/pkg/state"
 	"github.com/keboola/keboola-as-code/internal/pkg/telemetry"
 	"github.com/keboola/keboola-as-code/internal/pkg/validator"
@@ -84,17 +85,19 @@ import (
 type BaseScope interface {
 	Logger() log.Logger
 	Telemetry() telemetry.Telemetry
-	Clock() clock.Clock
+	Clock() clockwork.Clock
 	HTTPClient() client.Client
 	Validator() validator.Validator
 	Process() *servicectx.Process
+	Stdout() io.Writer
+	Stderr() io.Writer
 }
 
 // PublicScope dependencies are available from the Storage API and other sources without authentication / Storage API token.
 type PublicScope interface {
 	Components() *model.ComponentsMap
 	ComponentsProvider() *model.ComponentsProvider
-	KeboolaPublicAPI() *keboola.API
+	KeboolaPublicAPI() *keboola.PublicAPI
 	StackFeatures() keboola.FeaturesMap
 	StackServices() keboola.ServicesMap
 	StorageAPIHost() string
@@ -102,9 +105,10 @@ type PublicScope interface {
 
 // ProjectScope dependencies require authentication - Storage API token.
 type ProjectScope interface {
-	KeboolaProjectAPI() *keboola.API
+	KeboolaProjectAPI() *keboola.AuthorizedAPI
 	ObjectIDGeneratorFactory() func(ctx context.Context) *keboola.TicketProvider
 	ProjectID() keboola.ProjectID
+	ProjectBackends() []string
 	ProjectName() string
 	ProjectFeatures() keboola.FeaturesMap
 	StorageAPIToken() keboola.Token
@@ -114,8 +118,7 @@ type ProjectScope interface {
 // RequestInfo dependencies provides information about received HTTP request.
 type RequestInfo interface {
 	RequestID() string
-	RequestHeader() http.Header
-	RequestClientIP() net.IP
+	Request() *http.Request
 }
 
 // EtcdClientScope dependencies provides etcd client and serialization/deserialization.
@@ -134,9 +137,14 @@ type DistributionScope interface {
 	DistributionNode() *distributionPkg.Node
 }
 
-// OrchestratorScope dependencies to trigger tasks based on cluster nodes on etcd events.
-type OrchestratorScope interface {
-	OrchestratorNode() *orchestratorPkg.Node
+// DistributedLockScope dependencies to acquire distributed locks in the cluster.
+type DistributedLockScope interface {
+	DistributedLockProvider() *distlock.Provider
+}
+
+// EncryptionScope dependencies to encrypt tokens.
+type EncryptionScope interface {
+	Encryptor() cloudencrypt.Encryptor
 }
 
 // Mocked dependencies for tests.
@@ -147,9 +155,6 @@ type Mocked interface {
 	ProjectScope
 	RequestInfo
 	EtcdClientScope
-	TaskScope
-	DistributionScope
-	OrchestratorScope
 
 	MockControl
 }
@@ -157,9 +162,9 @@ type Mocked interface {
 // MockControl allows modification of mocked scopes and access to the insides in a test.
 type MockControl interface {
 	DebugLogger() log.DebugLogger
-	TestContext() context.Context
+	UseRealAPIs() bool
 	TestTelemetry() telemetry.ForTest
-	TestEtcdCredentials() etcdclient.Credentials
+	TestEtcdConfig() etcdclient.Config
 	TestEtcdClient() *etcdPkg.Client
 	MockedRequest() *http.Request
 	MockedHTTPTransport() *httpmock.MockTransport

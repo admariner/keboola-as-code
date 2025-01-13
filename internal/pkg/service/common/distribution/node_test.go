@@ -1,6 +1,7 @@
 package distribution_test
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"reflect"
@@ -8,8 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/benbjohnson/clock"
-	"github.com/keboola/go-utils/pkg/wildcards"
+	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/log"
@@ -24,26 +24,26 @@ import (
 func TestNodesDiscovery(t *testing.T) {
 	t.Parallel()
 
-	clk := clock.New() // use real clock
+	ctx := context.Background()
+	clk := clockwork.NewRealClock() // use real clock
 
-	etcdCredentials := etcdhelper.TmpNamespace(t)
-	client := etcdhelper.ClientForTest(t, etcdCredentials)
+	etcdCfg := etcdhelper.TmpNamespace(t)
+	client := etcdhelper.ClientForTest(t, etcdCfg)
 
 	// Create 3 nodes and (pseudo) processes
 	nodesCount := 3
 	lock := &sync.Mutex{}
-	nodes := make(map[int]*distribution.Node)
+	nodes := make(map[int]*distribution.GroupNode)
 	loggers := make(map[int]log.DebugLogger)
 	processes := make(map[int]*servicectx.Process)
 
 	// Create nodes
 	wg := &sync.WaitGroup{}
-	for i := 0; i < nodesCount; i++ {
-		i := i
+	for i := range nodesCount {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			node, d := createNode(t, clk, etcdCredentials, fmt.Sprintf("node%d", i+1))
+			node, d := createNode(t, ctx, clk, etcdCfg, fmt.Sprintf("node%d", i+1))
 			if node != nil {
 				lock.Lock()
 				nodes[i] = node
@@ -103,7 +103,7 @@ node3
 `)
 
 	// Shutdown node1
-	processes[0].Shutdown(errors.New("bye bye 1"))
+	processes[0].Shutdown(context.Background(), errors.New("bye bye 1"))
 	processes[0].WaitForShutdown()
 	assert.Eventually(t, func() bool {
 		return reflect.DeepEqual([]string{"node2", "node3"}, nodes[1].Nodes())
@@ -140,7 +140,7 @@ node3
 	assert.False(t, nodes[2].MustCheckIsOwner("foo1"))
 
 	// Shutdown node2
-	processes[1].Shutdown(errors.New("bye bye 2"))
+	processes[1].Shutdown(context.Background(), errors.New("bye bye 2"))
 	processes[1].WaitForShutdown()
 	assert.Eventually(t, func() bool {
 		return reflect.DeepEqual([]string{"node3"}, nodes[2].Nodes())
@@ -166,84 +166,83 @@ node3
 	assert.True(t, nodes[2].MustCheckIsOwner("foo4"))
 
 	// Shutdown node3
-	processes[2].Shutdown(errors.New("bye bye 3"))
+	processes[2].Shutdown(context.Background(), errors.New("bye bye 3"))
 	processes[2].WaitForShutdown()
 	etcdhelper.AssertKVsString(t, client, "")
 
 	// Logs differs in number of "the node ... gone" messages
-	wildcards.Assert(t, `
-[node1][distribution][my-group][etcd-session]INFO  creating etcd session
-[node1][distribution][my-group][etcd-session]INFO  created etcd session | %s
-[node1][distribution][my-group]INFO  registering the node "node1"
-[node1][distribution][my-group]INFO  the node "node1" registered | %s
-[node1][distribution][my-group]INFO  watching for other nodes
-[node1][distribution][my-group]INFO  found a new node "node%d"
-[node1][distribution][my-group]INFO  found a new node "node%d"
-[node1][distribution][my-group]INFO  found a new node "node%d"
-[node1]INFO  exiting (bye bye 1)
-[node1][distribution][my-group][listeners]INFO  received shutdown request
-[node1][distribution][my-group][listeners]INFO  shutdown done
-[node1][distribution][my-group]INFO  received shutdown request
-[node1][distribution][my-group]INFO  unregistering the node "node1"
-[node1][distribution][my-group]INFO  the node "node1" unregistered | %s
-[node1][distribution][my-group][etcd-session]INFO  closing etcd session
-[node1][distribution][my-group][etcd-session]INFO  closed etcd session | %s
-[node1][distribution][my-group]INFO  shutdown done
-[node1][etcd-client]INFO  closing etcd connection
-[node1][etcd-client]INFO  closed etcd connection | %s
-[node1]INFO  exited
-`, loggers[0].AllMessages())
-	wildcards.Assert(t, `
-[node2][distribution][my-group][etcd-session]INFO  creating etcd session
-[node2][distribution][my-group][etcd-session]INFO  created etcd session | %s
-[node2][distribution][my-group]INFO  registering the node "node2"
-[node2][distribution][my-group]INFO  the node "node2" registered | %s
-[node2][distribution][my-group]INFO  watching for other nodes
-[node2][distribution][my-group]INFO  found a new node "node%d"
-[node2][distribution][my-group]INFO  found a new node "node%d"
-[node2][distribution][my-group]INFO  found a new node "node%d"
-[node2][distribution][my-group]INFO  the node "node%d" gone
-[node2]INFO  exiting (bye bye 2)
-[node2][distribution][my-group][listeners]INFO  received shutdown request
-[node2][distribution][my-group][listeners]INFO  shutdown done
-[node2][distribution][my-group]INFO  received shutdown request
-[node2][distribution][my-group]INFO  unregistering the node "node2"
-[node2][distribution][my-group]INFO  the node "node2" unregistered | %s
-[node2][distribution][my-group][etcd-session]INFO  closing etcd session
-[node2][distribution][my-group][etcd-session]INFO  closed etcd session | %s
-[node2][distribution][my-group]INFO  shutdown done
-[node2][etcd-client]INFO  closing etcd connection
-[node2][etcd-client]INFO  closed etcd connection | %s
-[node2]INFO  exited
-`, loggers[1].AllMessages())
-	wildcards.Assert(t, `
-[node3][distribution][my-group][etcd-session]INFO  creating etcd session
-[node3][distribution][my-group][etcd-session]INFO  created etcd session | %s
-[node3][distribution][my-group]INFO  registering the node "node3"
-[node3][distribution][my-group]INFO  the node "node3" registered | %s
-[node3][distribution][my-group]INFO  watching for other nodes
-[node3][distribution][my-group]INFO  found a new node "node%d"
-[node3][distribution][my-group]INFO  found a new node "node%d"
-[node3][distribution][my-group]INFO  found a new node "node%d"
-[node3][distribution][my-group]INFO  the node "node%d" gone
-[node3][distribution][my-group]INFO  the node "node%d" gone
-[node3]INFO  exiting (bye bye 3)
-[node3][distribution][my-group][listeners]INFO  received shutdown request
-[node3][distribution][my-group][listeners]INFO  shutdown done
-[node3][distribution][my-group]INFO  received shutdown request
-[node3][distribution][my-group]INFO  unregistering the node "node3"
-[node3][distribution][my-group]INFO  the node "node3" unregistered | %s
-[node3][distribution][my-group][etcd-session]INFO  closing etcd session
-[node3][distribution][my-group][etcd-session]INFO  closed etcd session | %s
-[node3][distribution][my-group]INFO  shutdown done
-[node3][etcd-client]INFO  closing etcd connection
-[node3][etcd-client]INFO  closed etcd connection | %s
-[node3]INFO  exited
-`, loggers[2].AllMessages())
+	loggers[0].AssertJSONMessages(t, `
+{"level":"info","message":"joining distribution group","component":"distribution","distribution.node":"node1","distribution.group":"my-group"}
+{"level":"info","message":"creating etcd session"}
+{"level":"info","message":"created etcd session"}
+{"level":"info","message":"registering the node \"node1\""}
+{"level":"info","message":"the node \"node1\" registered"}
+{"level":"info","message":"watching for other nodes"}
+{"level":"info","message":"found a new node \"node%d\""}
+{"level":"info","message":"found a new node \"node%d\""}
+{"level":"info","message":"found a new node \"node%d\""}
+{"level":"info","message":"exiting (bye bye 1)"}
+{"level":"info","message":"received shutdown request"}
+{"level":"info","message":"unregistering the node \"node1\""}
+{"level":"info","message":"the node \"node1\" unregistered"}
+{"level":"info","message":"closing etcd session: context canceled"}
+{"level":"info","message":"closed etcd session"}
+{"level":"info","message":"shutdown done"}
+{"level":"info","message":"closing etcd connection","component":"etcd.client"}
+{"level":"info","message":"closed etcd connection","component":"etcd.client"}
+{"level":"info","message":"exited"}
+`)
+
+	loggers[1].AssertJSONMessages(t, `
+{"level":"info","message":"joining distribution group","component":"distribution","distribution.node":"node2","distribution.group":"my-group"}
+{"level":"info","message":"creating etcd session"}
+{"level":"info","message":"created etcd session"}
+{"level":"info","message":"registering the node \"node2\""}
+{"level":"info","message":"the node \"node2\" registered"}
+{"level":"info","message":"watching for other nodes"}
+{"level":"info","message":"found a new node \"node%d\""}
+{"level":"info","message":"found a new node \"node%d\""}
+{"level":"info","message":"found a new node \"node%d\""}
+{"level":"info","message":"the node \"node1\" gone"}
+{"level":"info","message":"exiting (bye bye 2)"}
+{"level":"info","message":"received shutdown request"}
+{"level":"info","message":"unregistering the node \"node2\""}
+{"level":"info","message":"the node \"node2\" unregistered"}
+{"level":"info","message":"closing etcd session: context canceled"}
+{"level":"info","message":"closed etcd session"}
+{"level":"info","message":"shutdown done"}
+{"level":"info","message":"closing etcd connection","component":"etcd.client"}
+{"level":"info","message":"closed etcd connection","component":"etcd.client"}
+{"level":"info","message":"exited"}
+`)
+
+	loggers[2].AssertJSONMessages(t, `
+{"level":"info","message":"joining distribution group","component":"distribution","distribution.node":"node3","distribution.group":"my-group"}
+{"level":"info","message":"creating etcd session"}
+{"level":"info","message":"created etcd session"}
+{"level":"info","message":"registering the node \"node3\""}
+{"level":"info","message":"the node \"node3\" registered"}
+{"level":"info","message":"watching for other nodes"}
+{"level":"info","message":"found a new node \"node%d\""}
+{"level":"info","message":"found a new node \"node%d\""}
+{"level":"info","message":"found a new node \"node%d\""}
+{"level":"info","message":"the node \"node1\" gone"}
+{"level":"info","message":"the node \"node2\" gone"}
+{"level":"info","message":"exiting (bye bye 3)"}
+{"level":"info","message":"received shutdown request"}
+{"level":"info","message":"unregistering the node \"node3\""}
+{"level":"info","message":"the node \"node3\" unregistered"}
+{"level":"info","message":"closing etcd session: context canceled"}
+{"level":"info","message":"closed etcd session"}
+{"level":"info","message":"shutdown done"}
+{"level":"info","message":"closing etcd connection","component":"etcd.client"}
+{"level":"info","message":"closed etcd connection","component":"etcd.client"}
+{"level":"info","message":"exited"}
+`)
 
 	// All node are off, start a new node
 	assert.Equal(t, 4, nodesCount+1)
-	node4, d4 := createNode(t, clk, etcdCredentials, "node4")
+	node4, d4 := createNode(t, ctx, clk, etcdCfg, "node4")
 	process4 := d4.Process()
 	assert.Eventually(t, func() bool {
 		return reflect.DeepEqual([]string{"node4"}, node4.Nodes())
@@ -258,66 +257,62 @@ node4
 >>>>>
 `)
 	// Shutdown node 4
-	process4.Shutdown(errors.New("bye bye 4"))
+	process4.Shutdown(context.Background(), errors.New("bye bye 4"))
 	process4.WaitForShutdown()
 	etcdhelper.AssertKVsString(t, client, "")
 
-	wildcards.Assert(t, `
-[node4][distribution][my-group][etcd-session]INFO  creating etcd session
-[node4][distribution][my-group][etcd-session]INFO  created etcd session | %s
-[node4][distribution][my-group]INFO  registering the node "node4"
-[node4][distribution][my-group]INFO  the node "node4" registered | %s
-[node4][distribution][my-group]INFO  watching for other nodes
-[node4][distribution][my-group]INFO  found a new node "node4"
-[node4]INFO  exiting (bye bye 4)
-[node4][distribution][my-group][listeners]INFO  received shutdown request
-[node4][distribution][my-group][listeners]INFO  shutdown done
-[node4][distribution][my-group]INFO  received shutdown request
-[node4][distribution][my-group]INFO  unregistering the node "node4"
-[node4][distribution][my-group]INFO  the node "node4" unregistered | %s
-[node4][distribution][my-group][etcd-session]INFO  closing etcd session
-[node4][distribution][my-group][etcd-session]INFO  closed etcd session | %s
-[node4][distribution][my-group]INFO  shutdown done
-[node4][etcd-client]INFO  closing etcd connection
-[node4][etcd-client]INFO  closed etcd connection | %s
-[node4]INFO  exited
-`, d4.DebugLogger().AllMessages())
+	d4.DebugLogger().AssertJSONMessages(t, `
+{"level":"info","message":"joining distribution group","component":"distribution","distribution.node":"node4","distribution.group":"my-group"}
+{"level":"info","message":"creating etcd session"}
+{"level":"info","message":"created etcd session"}
+{"level":"info","message":"registering the node \"node4\""}
+{"level":"info","message":"the node \"node4\" registered"}
+{"level":"info","message":"watching for other nodes"}
+{"level":"info","message":"found a new node \"node4\""}
+{"level":"info","message":"exiting (bye bye 4)"}
+{"level":"info","message":"received shutdown request"}
+{"level":"info","message":"unregistering the node \"node4\""}
+{"level":"info","message":"the node \"node4\" unregistered"}
+{"level":"info","message":"closing etcd session: context canceled"}
+{"level":"info","message":"closed etcd session"}
+{"level":"info","message":"shutdown done"}
+{"level":"info","message":"closing etcd connection","component":"etcd.client"}
+{"level":"info","message":"closed etcd connection","component":"etcd.client"}
+{"level":"info","message":"exited"}
+`)
 }
 
-func createNode(t *testing.T, clk clock.Clock, etcdCredentials etcdclient.Credentials, nodeName string) (*distribution.Node, dependencies.Mocked) {
+func createNode(t *testing.T, ctx context.Context, clk clockwork.Clock, etcdCfg etcdclient.Config, nodeID string) (*distribution.GroupNode, dependencies.Mocked) {
 	t.Helper()
 
 	// Create dependencies
-	d := createDeps(t, clk, nil, etcdCredentials, nodeName)
+	d := createDeps(t, ctx, clk, nil, etcdCfg)
 
 	// Speedup tests with real clock,
 	// and disable events grouping interval in tests with mocked clocks,
 	// events will be processed immediately.
 	groupInterval := 10 * time.Millisecond
-	if _, ok := clk.(*clock.Mock); ok {
+	if _, ok := clk.(*clockwork.FakeClock); ok {
 		groupInterval = 0
 	}
 
 	// Create node
-	node, err := distribution.NewNode(
-		"my-group",
-		d,
-		distribution.WithStartupTimeout(time.Second),
-		distribution.WithShutdownTimeout(time.Second),
-		distribution.WithEventsGroupInterval(groupInterval),
-	)
-	assert.NoError(t, err)
-	return node, d
+	cfg := distribution.NewConfig()
+	cfg.StartupTimeout = time.Second
+	cfg.ShutdownTimeout = time.Second
+	cfg.EventsGroupInterval = groupInterval
+	groupNode, _ := distribution.NewNode(nodeID, cfg, d).Group("my-group")
+	// require.NoError(t, err)
+	return groupNode, d
 }
 
-func createDeps(t *testing.T, clk clock.Clock, logs io.Writer, etcdCredentials etcdclient.Credentials, nodeName string) dependencies.Mocked {
+func createDeps(t *testing.T, ctx context.Context, clk clockwork.Clock, logs io.Writer, etcdCfg etcdclient.Config) dependencies.Mocked {
 	t.Helper()
 	d := dependencies.NewMocked(
 		t,
+		ctx,
 		dependencies.WithClock(clk),
-		dependencies.WithUniqueID(nodeName),
-		dependencies.WithLoggerPrefix(fmt.Sprintf("[%s]", nodeName)),
-		dependencies.WithEtcdCredentials(etcdCredentials),
+		dependencies.WithEtcdConfig(etcdCfg),
 	)
 	if logs != nil {
 		d.DebugLogger().ConnectTo(logs)

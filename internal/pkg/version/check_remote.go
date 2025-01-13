@@ -29,7 +29,7 @@ func NewGitHubChecker(parentCtx context.Context, logger log.Logger, skip bool) *
 	return &checker{ctx: ctx, client: c, cancel: cancel, logger: logger, skip: skip}
 }
 
-func (c *checker) CheckIfLatest(currentVersion string) error {
+func (c *checker) CheckIfLatest(ctx context.Context, currentVersion string) error {
 	defer c.cancel()
 
 	// Dev build
@@ -58,13 +58,13 @@ func (c *checker) CheckIfLatest(currentVersion string) error {
 	}
 
 	if latest.GreaterThan(current) {
-		c.logger.Warn(`*******************************************************`)
-		c.logger.Warnf(`WARNING: A new version "%s" is available.`, latestVersion)
-		c.logger.Warnf(`You are currently using version "%s".`, current.String())
-		c.logger.Warn(`Please update to get the latest features and bug fixes.`)
-		c.logger.Warn(`Read more: https://github.com/keboola/keboola-as-code/releases`)
-		c.logger.Warn(`*******************************************************`)
-		c.logger.Warn()
+		c.logger.Warn(ctx, `*******************************************************`)
+		c.logger.Warnf(ctx, `WARNING: A new version "%s" is available.`, latestVersion)
+		c.logger.Warnf(ctx, `You are currently using version "%s".`, current.String())
+		c.logger.Warn(ctx, `Please update to get the latest features and bug fixes.`)
+		c.logger.Warn(ctx, `Read more: https://github.com/keboola/keboola-as-code/releases`)
+		c.logger.Warn(ctx, `*******************************************************`)
+		c.logger.Warn(ctx, "")
 	}
 
 	return nil
@@ -73,7 +73,7 @@ func (c *checker) CheckIfLatest(currentVersion string) error {
 func (c *checker) getLatestVersion() (string, error) {
 	// Load releases
 	// The last release may be without assets (build in progress), so we load the last 5 releases.
-	result := make([]interface{}, 0)
+	result := make([]any, 0)
 	_, _, err := request.NewHTTPRequest(c.client).
 		WithGet("repos/keboola/keboola-as-code/releases?per_page=5").
 		WithResult(&result).
@@ -85,7 +85,7 @@ func (c *checker) getLatestVersion() (string, error) {
 	// Determine the latest version
 	for _, item := range result {
 		// Release is object
-		release, ok := item.(map[string]interface{})
+		release, ok := item.(map[string]any)
 		if !ok {
 			continue
 		}
@@ -97,7 +97,7 @@ func (c *checker) getLatestVersion() (string, error) {
 		}
 
 		// Assets is an array
-		assets, ok := assetsRaw.([]interface{})
+		assets, ok := assetsRaw.([]any)
 		if !ok {
 			continue
 		}

@@ -2,10 +2,15 @@
 package log
 
 import (
+	"bufio"
 	"io"
+	"strings"
 
+	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap/zapcore"
 
+	"github.com/keboola/keboola-as-code/internal/pkg/encoding/json"
+	"github.com/keboola/keboola-as-code/internal/pkg/utils/errors"
 	"github.com/keboola/keboola-as-code/internal/pkg/utils/ioutil"
 )
 
@@ -33,10 +38,14 @@ func (v *oneLevelEnabler) Enabled(level zapcore.Level) bool {
 // NewDebugLogger returns logs as string by String() method.
 // See also other methods of the ioutil.Writer.
 func NewDebugLogger() DebugLogger {
-	return NewDebugLoggerWithPrefix("")
+	return NewDebugLoggerWithMinLevel(DebugLevel)
 }
 
-func NewDebugLoggerWithPrefix(prefix string) DebugLogger {
+func NewDebugLoggerWithoutDebugLevel() DebugLogger {
+	return NewDebugLoggerWithMinLevel(InfoLevel)
+}
+
+func NewDebugLoggerWithMinLevel(minLevel zapcore.Level) DebugLogger {
 	l := &debugLogger{
 		all:         ioutil.NewAtomicWriter(),
 		debug:       ioutil.NewAtomicWriter(),
@@ -45,25 +54,41 @@ func NewDebugLoggerWithPrefix(prefix string) DebugLogger {
 		warnOrError: ioutil.NewAtomicWriter(),
 		error:       ioutil.NewAtomicWriter(),
 	}
-	cores := zapcore.NewTee(
-		debugCore(l.all, DebugLevel),                            // all = debug level and higher
-		debugCore(l.debug, &oneLevelEnabler{level: DebugLevel}), // only debug msgs
-		debugCore(l.info, &oneLevelEnabler{level: InfoLevel}),   // only info msgs
-		debugCore(l.warn, &oneLevelEnabler{level: WarnLevel}),   // only warn msgs
-		debugCore(l.warnOrError, WarnLevel),                     // warn or error = warn level and higher
-		debugCore(l.error, ErrorLevel),                          // error = error level and higher
-	)
-	if prefix != "" {
-		cores = cores.With([]zapcore.Field{{Key: "prefix", String: prefix, Type: zapcore.StringType}})
+
+	var cores []zapcore.Core
+
+	cores = append(cores, debugCore(l.all, minLevel))
+
+	if minLevel <= DebugLevel {
+		cores = append(cores, debugCore(l.debug, &oneLevelEnabler{level: DebugLevel}))
 	}
-	l.zapLogger = loggerFromZapCore(cores)
-	l.zapLogger.prefix = prefix
+
+	if minLevel <= InfoLevel {
+		cores = append(cores, debugCore(l.info, &oneLevelEnabler{level: InfoLevel}))
+	}
+
+	if minLevel <= WarnLevel {
+		cores = append(cores, debugCore(l.warn, &oneLevelEnabler{level: WarnLevel}))
+		cores = append(cores, debugCore(l.warnOrError, WarnLevel))
+	}
+
+	if minLevel <= ErrorLevel {
+		cores = append(cores, debugCore(l.error, ErrorLevel))
+	}
+
+	core := zapcore.NewTee(cores...)
+	l.zapLogger = newLoggerFromZapCore(core)
 	return l
 }
 
 // ConnectTo connects all messages to a writer, for example os.Stdout.
 func (l *debugLogger) ConnectTo(writer io.Writer) {
 	l.all.ConnectTo(writer)
+}
+
+// ConnectInfoTo connects all messages except debug to a writer, for example os.Stdout.
+func (l *debugLogger) ConnectInfoTo(writer io.Writer) {
+	l.info.ConnectTo(writer)
 }
 
 // Truncate clear all messages.
@@ -109,20 +134,73 @@ func (l *debugLogger) ErrorMessages() string {
 	return l.error.String()
 }
 
+// AllMessagesTxt returns all error messages as text only (without fields) and Truncate all messages.
+// Panics on a non-json message.
+func (l *debugLogger) AllMessagesTxt() string {
+	_ = l.Sync()
+
+	allMessages := l.all.String()
+	scanner := bufio.NewScanner(strings.NewReader(strings.Trim(allMessages, "\n")))
+
+	output := ""
+	for scanner.Scan() {
+		message := scanner.Text()
+		var messageData map[string]any
+		err := json.DecodeString(message, &messageData)
+		if err != nil {
+			panic(err)
+		}
+
+		message, ok := messageData["message"].(string)
+		if !ok {
+			panic(errors.New("log message is a json but does not have a \"message\" field"))
+		}
+
+		level, ok := messageData["level"].(string)
+		if !ok {
+			panic(errors.New("log message is a json but does not have a \"level\" field"))
+		}
+
+		output += strings.ToUpper(level) + "  " + message + "\n"
+	}
+
+	return output
+}
+
+// CompareJSONMessages checks that expected json messages appear in actual in the same order.
+// Actual string may have extra messages and the rest may have extra fields. String values are compared using wildcards.
+// Returns nil if the expectations are met or an error with the first unmatched expected line and all remaining actual lines.
+func (l *debugLogger) CompareJSONMessages(expected string) error {
+	return CompareJSONMessages(expected, l.AllMessages())
+}
+
+// AssertJSONMessages checks that expected json messages appear in actual in the same order.
+// Actual string may have extra messages and the rest may have extra fields. String values are compared using wildcards.
+func (l *debugLogger) AssertJSONMessages(t assert.TestingT, expected string, msgAndArgs ...any) bool {
+	if h, ok := t.(tHelper); ok {
+		h.Helper()
+	}
+
+	return AssertJSONMessages(t, expected, l.AllMessages(), msgAndArgs)
+}
+
+// AssertNoErrorMessage is a shortcut to check there is no warning/error message logged.
+func (l *debugLogger) AssertNoErrorMessage(t assert.TestingT) {
+	if h, ok := t.(tHelper); ok {
+		h.Helper()
+	}
+
+	// No message is excepted, but the AssertJSONMessages always stop on a warning or error.
+	l.AssertJSONMessages(t, "")
+}
+
 func (l *debugLogger) allWriters() []*ioutil.AtomicWriter {
 	return []*ioutil.AtomicWriter{l.all, l.debug, l.info, l.warn, l.warnOrError, l.error}
 }
 
 func debugCore(writer *ioutil.AtomicWriter, level zapcore.LevelEnabler) zapcore.Core {
-	encoderConfig := zapcore.EncoderConfig{
-		TimeKey:          "ts",
-		LevelKey:         "level",
-		MessageKey:       "msg",
-		EncodeLevel:      zapcore.CapitalLevelEncoder,
-		ConsoleSeparator: "  ",
-	}
 	return zapcore.NewCore(
-		newPrefixEncoder(zapcore.NewConsoleEncoder(encoderConfig)),
+		newJSONEncoder(),
 		writer,
 		level,
 	)

@@ -6,6 +6,7 @@ import (
 
 	"github.com/keboola/go-utils/pkg/orderedmap"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/encoding/json"
 	"github.com/keboola/keboola-as-code/internal/pkg/model"
@@ -64,7 +65,7 @@ func TestLoadRemoteTransformation(t *testing.T) {
 	}
 	json.MustDecodeString(configInAPI, object.Content)
 	recipe := model.NewRemoteLoadRecipe(configState.ConfigManifest, object)
-	assert.NoError(t, state.Mapper().MapAfterRemoteLoad(context.Background(), recipe))
+	require.NoError(t, state.Mapper().MapAfterRemoteLoad(context.Background(), recipe))
 	assert.Empty(t, logger.WarnAndErrorMessages())
 
 	// Internal representation
@@ -157,6 +158,6 @@ func TestLoadRemoteTransformation(t *testing.T) {
 	}
 
 	// In internal object are blocks in Blocks field, not in Content
-	assert.Equal(t, `{"parameters":{}}`, json.MustEncodeString(object.Content, false))
+	assert.JSONEq(t, `{"parameters":{}}`, json.MustEncodeString(object.Content, false))
 	assert.Equal(t, expected, object.Transformation.Blocks)
 }

@@ -2,7 +2,9 @@
 package testhelper
 
 import (
+	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/keboola/go-utils/pkg/wildcards"
@@ -26,8 +28,8 @@ type fileNodeState struct {
 }
 
 // DirectoryContentsSame compares two directories, in expected file content can be used wildcards.
-func DirectoryContentsSame(expectedFs filesystem.Fs, expectedDir string, actualFs filesystem.Fs, actualDir string) error {
-	nodesState := compareDirectories(expectedFs, expectedDir, actualFs, actualDir)
+func DirectoryContentsSame(ctx context.Context, expectedFs filesystem.Fs, expectedDir string, actualFs filesystem.Fs, actualDir string) error {
+	nodesState := compareDirectories(ctx, expectedFs, expectedDir, actualFs, actualDir)
 	var errs []string
 	for _, node := range nodesState {
 		// Check if present if both dirs (actual/expected) and if has same type (file/dir)
@@ -45,17 +47,20 @@ func DirectoryContentsSame(expectedFs filesystem.Fs, expectedDir string, actualF
 		default:
 			// Compare content
 			if !node.actual.isDir {
-				expectedFile, err := expectedFs.ReadFile(filesystem.NewFileDef(node.expected.absPath))
+				expectedFile, err := expectedFs.ReadFile(ctx, filesystem.NewFileDef(node.expected.absPath))
 				if err != nil {
 					return err
 				}
-				actualFile, err := actualFs.ReadFile(filesystem.NewFileDef(node.actual.absPath))
+				actualFile, err := actualFs.ReadFile(ctx, filesystem.NewFileDef(node.actual.absPath))
 				if err != nil {
 					return err
 				}
+				normalizeExpectedFile := normalizeString(expectedFile.Content)
+				normalizeActualFile := normalizeString(actualFile.Content)
+
 				err = wildcards.Compare(
-					expectedFile.Content,
-					actualFile.Content,
+					normalizeExpectedFile,
+					normalizeActualFile,
 				)
 				if err != nil {
 					return errors.PrefixErrorf(err, `different content of the file "%s"`, node.relPath)
@@ -70,21 +75,29 @@ func DirectoryContentsSame(expectedFs filesystem.Fs, expectedDir string, actualF
 	return nil
 }
 
+type tHelper interface {
+	Helper()
+}
+
 // AssertDirectoryContentsSame compares two directories, in expected file content can be used wildcards.
 func AssertDirectoryContentsSame(t assert.TestingT, expectedFs filesystem.Fs, expectedDir string, actualFs filesystem.Fs, actualDir string) {
-	err := DirectoryContentsSame(expectedFs, expectedDir, actualFs, actualDir)
+	if h, ok := t.(tHelper); ok {
+		h.Helper()
+	}
+
+	err := DirectoryContentsSame(context.Background(), expectedFs, expectedDir, actualFs, actualDir)
 	if err != nil {
 		assert.Fail(t, err.Error())
 	}
 }
 
-func compareDirectories(expectedFs filesystem.Fs, expectedDir string, actualFs filesystem.Fs, actualDir string) map[string]*fileNodeState {
+func compareDirectories(ctx context.Context, expectedFs filesystem.Fs, expectedDir string, actualFs filesystem.Fs, actualDir string) map[string]*fileNodeState {
 	// relative path -> state
 	hashMap := map[string]*fileNodeState{}
 	var err error
 
 	// Process actual dir
-	err = actualFs.Walk(actualDir, func(path string, info filesystem.FileInfo, err error) error {
+	err = actualFs.Walk(ctx, actualDir, func(path string, info filesystem.FileInfo, err error) error {
 		// Stop on error
 		if err != nil {
 			return err
@@ -107,20 +120,19 @@ func compareDirectories(expectedFs filesystem.Fs, expectedDir string, actualFs f
 		}
 
 		// Create node
-		hashMap[relPath] = &fileNodeState{
-			relPath: relPath,
+		hashMap[normalizeString(relPath)] = &fileNodeState{
+			relPath: normalizeString(relPath),
 			actual:  &fileNode{info.IsDir(), path},
 		}
 
 		return nil
 	})
-
 	if err != nil {
 		panic(errors.Errorf(`cannot iterate over directory "%s" in "%s": %w`, actualDir, actualFs.BasePath(), err))
 	}
 
 	// Process expected dir
-	err = expectedFs.Walk(expectedDir, func(path string, info filesystem.FileInfo, err error) error {
+	err = expectedFs.Walk(ctx, expectedDir, func(path string, info filesystem.FileInfo, err error) error {
 		// Stop on error
 		if err != nil {
 			return err
@@ -143,18 +155,30 @@ func compareDirectories(expectedFs filesystem.Fs, expectedDir string, actualFs f
 		}
 
 		// Create node if not exists
-		if _, ok := hashMap[relPath]; !ok {
-			hashMap[relPath] = &fileNodeState{}
+		if _, ok := hashMap[normalizeString(relPath)]; !ok {
+			hashMap[normalizeString(relPath)] = &fileNodeState{}
 		}
-		hashMap[relPath].relPath = relPath
-		hashMap[relPath].expected = &fileNode{info.IsDir(), path}
+		hashMap[normalizeString(relPath)].relPath = normalizeString(relPath)
+		hashMap[normalizeString(relPath)].expected = &fileNode{info.IsDir(), path}
 
 		return nil
 	})
-
 	if err != nil {
 		panic(errors.Errorf(`cannot iterate over directory "%s" in "%s": %w`, expectedDir, expectedFs.BasePath(), err))
 	}
 
 	return hashMap
+}
+
+// normalizeString replaces numeric IDs in a string with "-%s".
+func normalizeString(input string) string {
+	return regexp.MustCompile(`-\d+`).
+		ReplaceAllString(input, "-%s")
+}
+
+func Normalize(t assert.TestingT, input string) string {
+	if h, ok := t.(tHelper); ok {
+		h.Helper()
+	}
+	return normalizeString(input)
 }

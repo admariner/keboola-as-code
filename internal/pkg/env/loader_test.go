@@ -1,10 +1,11 @@
 package env
 
 import (
-	"strings"
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem"
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem/aferofs"
@@ -16,17 +17,18 @@ func TestLoadDotEnv(t *testing.T) {
 	// Memory fs
 	logger := log.NewDebugLogger()
 	fs := aferofs.NewMemoryFs(filesystem.WithLogger(logger))
+	ctx := context.Background()
 
 	// Write envs to file
 	osEnvs := Empty()
 	osEnvs.Set(`FOO1`, `BAR1`)
 	osEnvs.Set(`OS_ONLY`, `123`)
-	assert.NoError(t, fs.WriteFile(filesystem.NewRawFile(".env.local", "FOO1=BAR2\nFOO2=BAR2\n")))
-	assert.NoError(t, fs.WriteFile(filesystem.NewRawFile(".env", "FOO1=BAZ\nFOO3=BAR3\n")))
+	require.NoError(t, fs.WriteFile(ctx, filesystem.NewRawFile(".env.local", "FOO1=BAR2\nFOO2=BAR2\n")))
+	require.NoError(t, fs.WriteFile(ctx, filesystem.NewRawFile(".env", "FOO1=BAZ\nFOO3=BAR3\n")))
 
 	// Load envs
 	logger.Truncate()
-	envs := LoadDotEnv(logger, osEnvs, fs, []string{"."})
+	envs := LoadDotEnv(context.Background(), logger, osEnvs, fs, []string{"."})
 
 	// Assert
 	assert.Equal(t, map[string]string{
@@ -37,12 +39,12 @@ func TestLoadDotEnv(t *testing.T) {
 	}, envs.ToMap())
 
 	expected := `
-DEBUG  Loaded ".env.local"
-INFO  Loaded env file ".env.local".
-DEBUG  Loaded ".env"
-INFO  Loaded env file ".env".
+{"level":"debug","message":"Loaded \".env.local\""}
+{"level":"info","message":"Loaded env file \".env.local\"."}
+{"level":"debug","message":"Loaded \".env\""}
+{"level":"info","message":"Loaded env file \".env\"."}
 `
-	assert.Equal(t, strings.TrimLeft(expected, "\n"), logger.AllMessages())
+	logger.AssertJSONMessages(t, expected)
 }
 
 func TestLoadDotEnv_Invalid(t *testing.T) {
@@ -52,17 +54,17 @@ func TestLoadDotEnv_Invalid(t *testing.T) {
 	fs := aferofs.NewMemoryFs(filesystem.WithLogger(logger))
 
 	// Write envs to file
-	assert.NoError(t, fs.WriteFile(filesystem.NewRawFile(".env.local", "invalid")))
+	require.NoError(t, fs.WriteFile(context.Background(), filesystem.NewRawFile(".env.local", "invalid")))
 
 	// Load envs
 	logger.Truncate()
-	envs := LoadDotEnv(logger, Empty(), fs, []string{"."})
+	envs := LoadDotEnv(context.Background(), logger, Empty(), fs, []string{"."})
 
 	// Assert
 	assert.Equal(t, map[string]string{}, envs.ToMap())
 	expected := `
-DEBUG  Loaded ".env.local"
-WARN  cannot parse env file ".env.local": unexpected character "\n" in variable name near "invalid\n"
+{"level":"debug","message":"Loaded \".env.local\""}
+{"level":"warn","message":"cannot parse env file \".env.local\": unexpected character \"\\n\" in variable name near \"invalid\\n\""}
 `
-	assert.Equal(t, strings.TrimLeft(expected, "\n"), logger.AllMessages())
+	logger.AssertJSONMessages(t, expected)
 }

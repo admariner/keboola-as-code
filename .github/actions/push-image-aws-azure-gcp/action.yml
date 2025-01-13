@@ -44,29 +44,24 @@ runs:
   using: "composite"
   steps:
     - name: Configure AWS Credentials
-      uses: aws-actions/configure-aws-credentials@v1-node16
+      uses: aws-actions/configure-aws-credentials@v4
       with:
         aws-region: ${{ inputs.ecrRegion }}
         role-to-assume: ${{ inputs.ecrPushRole }}
 
     - name: Login to Amazon ECR
       id: login-ecr
-      uses: aws-actions/amazon-ecr-login@v1
+      uses: aws-actions/amazon-ecr-login@v2
 
     - name: Push image to Amazon ECR
       shell: bash
-      env:
-        IMAGE: ${{ inputs.imageName }}
-        TAG: ${{ inputs.imageTag }}
-        REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        REPOSITORY: ${{ inputs.ecrRepository }}
       run: |
-        docker tag $IMAGE:$TAG $REGISTRY/$REPOSITORY:$TAG
-        docker push $REGISTRY/$REPOSITORY:$TAG
+        docker tag ${{ inputs.imageName }}:${{ inputs.imageTag }} ${{ steps.login-ecr.outputs.registry }}/${{ inputs.ecrRepository }}:${{ inputs.imageTag }}
+        docker push ${{ steps.login-ecr.outputs.registry }}/${{ inputs.ecrRepository }}:${{ inputs.imageTag }}
 
     - id: 'gcpAuth'
       name: Authenticate to GCP
-      uses: google-github-actions/auth@v1
+      uses: google-github-actions/auth@v2
       with:
         token_format: access_token
         create_credentials_file: true
@@ -74,7 +69,7 @@ runs:
         service_account: ${{ inputs.gcpServiceAccount }}
 
     - name: Login to GCP GAR
-      uses: docker/login-action@v1
+      uses: docker/login-action@v3
       with:
         registry: ${{ inputs.gcpRegistry }}
         username: oauth2accesstoken
@@ -82,17 +77,12 @@ runs:
 
     - name: Push image to GCP GAR
       shell: bash
-      env:
-        IMAGE: ${{ inputs.imageName }}
-        TAG: ${{ inputs.imageTag }}
-        REGISTRY: ${{ inputs.gcpRegistry }}
-        REPOSITORY: ${{ inputs.gcpRepository }}
       run: |
-        docker tag $IMAGE:$TAG $REGISTRY/$REPOSITORY:$TAG
-        docker push $REGISTRY/$REPOSITORY:$TAG
+        docker tag ${{ inputs.imageName }}:${{ inputs.imageTag }} ${{ inputs.gcpRegistry }}/${{ inputs.gcpRepository }}:${{ inputs.imageTag }}
+        docker push ${{ inputs.gcpRegistry }}/${{ inputs.gcpRepository }}:${{ inputs.imageTag }}
 
     - name: Login to Azure ACR
-      uses: azure/docker-login@v1
+      uses: azure/docker-login@v2
       with:
         login-server: ${{ inputs.acrRegistry }}
         username: ${{ inputs.acrUsername }}
@@ -100,11 +90,7 @@ runs:
 
     - name: Push image to Azure ACR
       shell: bash
-      env:
-        IMAGE: ${{ inputs.imageName }}
-        TAG: ${{ inputs.imageTag }}
-        REGISTRY: ${{ inputs.acrRegistry }}
-        REPOSITORY: ${{ inputs.acrRepository }}
       run: |
-        docker tag $IMAGE:$TAG $REGISTRY/$REPOSITORY:$TAG
-        docker push $REGISTRY/$REPOSITORY:$TAG
+        docker tag ${{ inputs.imageName }}:${{ inputs.imageTag }} ${{ inputs.acrRegistry }}/${{ inputs.acrRepository }}:${{ inputs.imageTag }}
+        docker push ${{ inputs.acrRegistry }}/${{ inputs.acrRepository }}:${{ inputs.imageTag }}
+

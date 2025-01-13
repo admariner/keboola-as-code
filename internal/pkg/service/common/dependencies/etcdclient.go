@@ -2,6 +2,7 @@ package dependencies
 
 import (
 	"context"
+	"reflect"
 
 	etcdPkg "go.etcd.io/etcd/client/v3"
 
@@ -16,23 +17,27 @@ type etcdClientScope struct {
 	serde  *serde.Serde
 }
 
-func NewEtcdClientScope(ctx context.Context, baseScp BaseScope, credentials etcdclient.Credentials, opts ...etcdclient.Option) (EtcdClientScope, error) {
-	return newEtcdClientScope(ctx, baseScp, credentials, opts...)
+func NewEtcdClientScope(ctx context.Context, baseScp BaseScope, cfg etcdclient.Config) (EtcdClientScope, error) {
+	return newEtcdClientScope(ctx, baseScp, cfg)
 }
 
-func newEtcdClientScope(ctx context.Context, baseScp BaseScope, credentials etcdclient.Credentials, opts ...etcdclient.Option) (v *etcdClientScope, err error) {
+func newEtcdClientScope(ctx context.Context, baseScp BaseScope, cfg etcdclient.Config) (v *etcdClientScope, err error) {
 	ctx, span := baseScp.Telemetry().Tracer().Start(ctx, "keboola.go.common.dependencies.NewEtcdClientScope")
 	defer span.End(&err)
 
-	opts = append(opts, etcdclient.WithLogger(baseScp.Logger()))
-	client, err := etcdclient.New(ctx, baseScp.Process(), baseScp.Telemetry(), credentials, opts...)
+	client, err := etcdclient.New(ctx, baseScp.Process(), baseScp.Telemetry(), baseScp.Logger(), baseScp.Stderr(), cfg)
 	if err != nil {
 		return nil, err
 	}
 
 	return &etcdClientScope{
 		client: client,
-		serde:  serde.NewJSON(baseScp.Validator().Validate),
+		serde: serde.NewJSON(func(ctx context.Context, value any) error {
+			if k := reflect.ValueOf(value).Kind(); k != reflect.Struct && k != reflect.Pointer {
+				return baseScp.Validator().Validate(ctx, value)
+			}
+			return nil
+		}),
 	}, nil
 }
 

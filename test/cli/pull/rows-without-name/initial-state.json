@@ -1,4 +1,8 @@
 {
+  "backend": {
+    "type": "snowflake"
+  },
+  "legacyTransformation": true,
   "allBranchesConfigs": [
     "rows-without-name"
   ],

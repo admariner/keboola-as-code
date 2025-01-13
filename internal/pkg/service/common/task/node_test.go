@@ -2,13 +2,12 @@ package task_test
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/keboola/go-utils/pkg/wildcards"
+	"github.com/keboola/go-client/pkg/keboola"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	etcd "go.etcd.io/etcd/client/v3"
@@ -21,6 +20,8 @@ import (
 
 	"github.com/keboola/keboola-as-code/internal/pkg/log"
 	"github.com/keboola/keboola-as-code/internal/pkg/service/common/dependencies"
+	"github.com/keboola/keboola-as-code/internal/pkg/service/common/distribution"
+	svcerrors "github.com/keboola/keboola-as-code/internal/pkg/service/common/errors"
 	"github.com/keboola/keboola-as-code/internal/pkg/service/common/etcdclient"
 	"github.com/keboola/keboola-as-code/internal/pkg/service/common/task"
 	"github.com/keboola/keboola-as-code/internal/pkg/telemetry"
@@ -35,8 +36,9 @@ func TestSuccessfulTask(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	etcdCredentials := etcdhelper.TmpNamespace(t)
-	client := etcdhelper.ClientForTest(t, etcdCredentials)
+	etcdCfg := etcdhelper.TmpNamespace(t)
+	client := etcdhelper.ClientForTest(t, etcdCfg)
+	ignoredEtcdKeys := etcdhelper.WithIgnoredKeyPattern("^(runtime/distribution/)")
 
 	lock := "my-lock"
 	taskType := "some.task"
@@ -49,15 +51,15 @@ func TestSuccessfulTask(t *testing.T) {
 	tel := newTestTelemetryWithFilter(t)
 
 	// Create nodes
-	node1, _ := createNode(t, etcdCredentials, logs, tel, "node1")
-	node2, _ := createNode(t, etcdCredentials, logs, tel, "node2")
+	node1, _ := createNode(t, ctx, etcdCfg, logs, tel, "node1")
+	node2, _ := createNode(t, ctx, etcdCfg, logs, tel, "node2")
 	logs.Truncate()
 	tel.Reset()
 
 	// Start a task
 	taskWork := make(chan struct{})
 	taskDone := make(chan struct{})
-	_, err := node1.StartTask(task.Config{
+	_, err := node1.StartTask(ctx, task.Config{
 		Key:  tKey,
 		Type: taskType,
 		Lock: lock,
@@ -67,12 +69,15 @@ func TestSuccessfulTask(t *testing.T) {
 		Operation: func(ctx context.Context, logger log.Logger) task.Result {
 			defer close(taskDone)
 			<-taskWork
-			logger.Info("some message from the task (1)")
-			return task.OkResult("some result (1)").WithOutput("key", "value")
+
+			logger.Info(ctx, "some message from the task (1)")
+			return task.OkResult("some result (1)").
+				WithOutput("key", "value").
+				WithOutputsFrom(map[string]int{"int1": 1, "int2": 2})
 		},
 	})
-	assert.NoError(t, err)
-	_, err = node2.StartTask(task.Config{
+	require.NoError(t, err)
+	_, err = node2.StartTask(ctx, task.Config{
 		Key:  tKey,
 		Type: taskType,
 		Lock: lock,
@@ -84,7 +89,7 @@ func TestSuccessfulTask(t *testing.T) {
 			return task.ErrResult(errors.New("the task should not be called"))
 		},
 	})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Check etcd state during task
 	etcdhelper.AssertKVsString(t, client, `
@@ -106,7 +111,7 @@ task/123/my-receiver/my-export/some.task/%s
   "lock": "runtime/lock/task/my-lock"
 }
 >>>>>
-`)
+`, ignoredEtcdKeys)
 
 	// Wait for task to finish
 	finishTaskAndWait(t, client, taskWork, taskDone)
@@ -126,17 +131,19 @@ task/123/my-receiver/my-export/some.task/%s
   "lock": "runtime/lock/task/my-lock",
   "result": "some result (1)",
   "outputs": {
+    "int1": 1,
+    "int2": 2,
     "key": "value"
   },
   "duration": %d
 }
 >>>>>
-`)
+`, ignoredEtcdKeys)
 
 	// Start another task with the same lock (lock is free)
 	taskWork = make(chan struct{})
 	taskDone = make(chan struct{})
-	_, err = node2.StartTask(task.Config{
+	taskEntity, err := node2.StartTask(ctx, task.Config{
 		Key:  tKey,
 		Type: taskType,
 		Lock: lock,
@@ -146,14 +153,24 @@ task/123/my-receiver/my-export/some.task/%s
 		Operation: func(ctx context.Context, logger log.Logger) task.Result {
 			defer close(taskDone)
 			<-taskWork
-			logger.Info("some message from the task (2)")
+			logger.Info(ctx, "some message from the task (2)")
 			return task.OkResult("some result (2)")
 		},
 	})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Wait for task to finish
 	finishTaskAndWait(t, client, taskWork, taskDone)
+
+	// Get task
+	{
+		result, err := node1.GetTask(taskEntity.Key).Do(ctx).ResultOrErr()
+		if assert.NoError(t, err) {
+			assert.Equal(t, keboola.ProjectID(123), result.ProjectID)
+			assert.True(t, strings.HasPrefix(result.TaskID.String(), "my-receiver/my-export/some.task/"), result.TaskID.String())
+			assert.Equal(t, "some.task", result.Type)
+		}
+	}
 
 	// Check etcd state after second task
 	etcdhelper.AssertKVsString(t, client, `
@@ -170,6 +187,8 @@ task/123/my-receiver/my-export/some.task/%s
   "lock": "runtime/lock/task/my-lock",
   "result": "some result (1)",
   "outputs": {
+    "int1": 1,
+    "int2": 2,
     "key": "value"
   },
   "duration": %d
@@ -191,21 +210,21 @@ task/123/my-receiver/my-export/some.task/%s
   "duration": %d
 }
 >>>>>
-`)
+`, ignoredEtcdKeys)
 
 	// Check logs
-	wildcards.Assert(t, `
-[node1][task][123/my-receiver/my-export/some.task/%s]INFO  started task
-[node1][task][123/my-receiver/my-export/some.task/%s]DEBUG  lock acquired "runtime/lock/task/my-lock"
-[node2][task][123/my-receiver/my-export/some.task/%s]INFO  task ignored, the lock "runtime/lock/task/my-lock" is in use
-[node1][task][123/my-receiver/my-export/some.task/%s]INFO  some message from the task (1)
-[node1][task][123/my-receiver/my-export/some.task/%s]INFO  task succeeded (%s): some result (1) outputs: {"key":"value"}
-[node1][task][123/my-receiver/my-export/some.task/%s]DEBUG  lock released "runtime/lock/task/my-lock"
-[node2][task][123/my-receiver/my-export/some.task/%s]INFO  started task
-[node2][task][123/my-receiver/my-export/some.task/%s]DEBUG  lock acquired "runtime/lock/task/my-lock"
-[node2][task][123/my-receiver/my-export/some.task/%s]INFO  some message from the task (2)
-[node2][task][123/my-receiver/my-export/some.task/%s]INFO  task succeeded (%s): some result (2)
-[node2][task][123/my-receiver/my-export/some.task/%s]DEBUG  lock released "runtime/lock/task/my-lock"
+	log.AssertJSONMessages(t, `
+{"level":"info","message":"started task","component":"task","task":"123/my-receiver/my-export/some.task/%s","node":"node1"}
+{"level":"debug","message":"lock acquired \"runtime/lock/task/my-lock\"","component":"task","task":"123/my-receiver/my-export/some.task/%s","node":"node1"}
+{"level":"info","message":"task ignored, the lock \"runtime/lock/task/my-lock\" is in use","component":"task","task":"123/my-receiver/my-export/some.task/%s","node":"node2"}
+{"level":"info","message":"some message from the task (1)","component":"task","task":"123/my-receiver/my-export/some.task/%s","node":"node1"}
+{"level":"info","message":"task succeeded (%s): some result (1)","component":"task","task":"123/my-receiver/my-export/some.task/%s","node":"node1"}
+{"level":"debug","message":"lock released \"runtime/lock/task/my-lock\"","component":"task","task":"123/my-receiver/my-export/some.task/%s","node":"node1"}
+{"level":"info","message":"started task","component":"task","task":"123/my-receiver/my-export/some.task/%s","node":"node2"}
+{"level":"debug","message":"lock acquired \"runtime/lock/task/my-lock\"","component":"task","task":"123/my-receiver/my-export/some.task/%s","node":"node2"}
+{"level":"info","message":"some message from the task (2)","component":"task","task":"123/my-receiver/my-export/some.task/%s","node":"node2"}
+{"level":"info","message":"task succeeded (%s): some result (2)","component":"task","task":"123/my-receiver/my-export/some.task/%s","node":"node2"}
+{"level":"debug","message":"lock released \"runtime/lock/task/my-lock\"","component":"task","task":"123/my-receiver/my-export/some.task/%s","node":"node2"}
 `, logs.String())
 
 	// Check spans
@@ -231,6 +250,9 @@ task/123/my-receiver/my-export/some.task/%s
 					attribute.String("duration_sec", "<dynamic>"),
 					attribute.String("finished_at", "<dynamic>"),
 					attribute.Bool("is_success", true),
+					attribute.String("result", "some result (1)"),
+					attribute.String("result_outputs.int1", "1"),
+					attribute.String("result_outputs.int2", "2"),
 					attribute.String("result_outputs.key", "value"),
 				},
 			},
@@ -254,6 +276,7 @@ task/123/my-receiver/my-export/some.task/%s
 					attribute.String("duration_sec", "<dynamic>"),
 					attribute.String("finished_at", "<dynamic>"),
 					attribute.Bool("is_success", true),
+					attribute.String("result", "some result (2)"),
 				},
 			},
 		},
@@ -311,8 +334,9 @@ func TestFailedTask(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	etcdCredentials := etcdhelper.TmpNamespace(t)
-	client := etcdhelper.ClientForTest(t, etcdCredentials)
+	etcdCfg := etcdhelper.TmpNamespace(t)
+	client := etcdhelper.ClientForTest(t, etcdCfg)
+	ignoredEtcdKeys := etcdhelper.WithIgnoredKeyPattern("^(runtime/distribution/)")
 
 	lock := "my-lock"
 	taskType := "some.task"
@@ -325,15 +349,15 @@ func TestFailedTask(t *testing.T) {
 	tel := newTestTelemetryWithFilter(t)
 
 	// Create nodes
-	node1, _ := createNode(t, etcdCredentials, logs, tel, "node1")
-	node2, _ := createNode(t, etcdCredentials, logs, tel, "node2")
+	node1, _ := createNode(t, ctx, etcdCfg, logs, tel, "node1")
+	node2, _ := createNode(t, ctx, etcdCfg, logs, tel, "node2")
 	logs.Truncate()
 	tel.Reset()
 
 	// Start a task
 	taskWork := make(chan struct{})
 	taskDone := make(chan struct{})
-	_, err := node1.StartTask(task.Config{
+	_, err := node1.StartTask(ctx, task.Config{
 		Key:  tKey,
 		Type: taskType,
 		Lock: lock,
@@ -343,14 +367,14 @@ func TestFailedTask(t *testing.T) {
 		Operation: func(ctx context.Context, logger log.Logger) task.Result {
 			defer close(taskDone)
 			<-taskWork
-			logger.Info("some message from the task (1)")
+			logger.Info(ctx, "some message from the task (1)")
 			return task.
 				ErrResult(task.WrapUserError(errors.New("some error (1) - expected"))).
 				WithOutput("key", "value")
 		},
 	})
-	assert.NoError(t, err)
-	_, err = node2.StartTask(task.Config{
+	require.NoError(t, err)
+	_, err = node2.StartTask(ctx, task.Config{
 		Key:  tKey,
 		Type: taskType,
 		Lock: lock,
@@ -362,7 +386,7 @@ func TestFailedTask(t *testing.T) {
 			return task.ErrResult(errors.New("the task should not be called"))
 		},
 	})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Check etcd state during task
 	etcdhelper.AssertKVsString(t, client, `
@@ -384,7 +408,7 @@ task/123/my-receiver/my-export/some.task/%s
   "lock": "runtime/lock/task/my-lock"
 }
 >>>>>
-`)
+`, ignoredEtcdKeys)
 
 	// Wait for task to finish
 	finishTaskAndWait(t, client, taskWork, taskDone)
@@ -403,18 +427,23 @@ task/123/my-receiver/my-export/some.task/%s
   "node": "node1",
   "lock": "runtime/lock/task/my-lock",
   "error": "some error (1) - expected",
+  "userError": {
+    "name": "unknownError",
+    "message": "Unknown error",
+    "exceptionId": "test-service-%s"
+  },
   "outputs": {
     "key": "value"
   },
   "duration": %d
 }
 >>>>>
-`)
+`, ignoredEtcdKeys)
 
 	// Start another task with the same lock (lock is free)
 	taskWork = make(chan struct{})
 	taskDone = make(chan struct{})
-	_, err = node2.StartTask(task.Config{
+	_, err = node2.StartTask(ctx, task.Config{
 		Key:  tKey,
 		Type: taskType,
 		Lock: lock,
@@ -424,11 +453,12 @@ task/123/my-receiver/my-export/some.task/%s
 		Operation: func(ctx context.Context, logger log.Logger) task.Result {
 			defer close(taskDone)
 			<-taskWork
-			logger.Info("some message from the task (2)")
-			return task.ErrResult(errors.New("some error (2) - unexpected"))
+			logger.Info(ctx, "some message from the task (2)")
+
+			return task.ErrResult(svcerrors.NewInsufficientStorageError(false, errors.New("no space right on device")))
 		},
 	})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Wait for task to finish
 	finishTaskAndWait(t, client, taskWork, taskDone)
@@ -447,6 +477,11 @@ task/123/my-receiver/my-export/some.task/%s
   "node": "node1",
   "lock": "runtime/lock/task/my-lock",
   "error": "some error (1) - expected",
+  "userError": {
+    "name": "unknownError",
+    "message": "Unknown error",
+    "exceptionId": "test-service-%s"
+  },
   "outputs": {
     "key": "value"
   },
@@ -465,25 +500,30 @@ task/123/my-receiver/my-export/some.task/%s
   "finishedAt": "%s",
   "node": "node2",
   "lock": "runtime/lock/task/my-lock",
-  "error": "some error (2) - unexpected",
+  "error": "no space right on device",
+  "userError": {
+    "name": "insufficientStorage",
+    "message": "No space right on device.",
+    "exceptionId": "test-service-%s"
+  },
   "duration": %d
 }
 >>>>>
-`)
+`, ignoredEtcdKeys)
 
 	// Check logs
-	wildcards.Assert(t, `
-[node1][task][123/my-receiver/my-export/some.task/%s]INFO  started task
-[node1][task][123/my-receiver/my-export/some.task/%s]DEBUG  lock acquired "runtime/lock/task/my-lock"
-[node2][task][123/my-receiver/my-export/some.task/%s]INFO  task ignored, the lock "runtime/lock/task/my-lock" is in use
-[node1][task][123/my-receiver/my-export/some.task/%s]INFO  some message from the task (1)
-[node1][task][123/my-receiver/my-export/some.task/%s]WARN  task failed (%s): some error (1) - expected %A outputs: {"key":"value"}
-[node1][task][123/my-receiver/my-export/some.task/%s]DEBUG  lock released "runtime/lock/task/my-lock"
-[node2][task][123/my-receiver/my-export/some.task/%s]INFO  started task
-[node2][task][123/my-receiver/my-export/some.task/%s]DEBUG  lock acquired "runtime/lock/task/my-lock"
-[node2][task][123/my-receiver/my-export/some.task/%s]INFO  some message from the task (2)
-[node2][task][123/my-receiver/my-export/some.task/%s]WARN  task failed (%s): some error (2) - unexpected [%s]
-[node2][task][123/my-receiver/my-export/some.task/%s]DEBUG  lock released "runtime/lock/task/my-lock"
+	log.AssertJSONMessages(t, `
+{"level":"info","message":"started task","component":"task","task":"123/my-receiver/my-export/some.task/%s","node":"node1"}
+{"level":"debug","message":"lock acquired \"runtime/lock/task/my-lock\"","component":"task","task":"123/my-receiver/my-export/some.task/%s","node":"node1"}
+{"level":"info","message":"task ignored, the lock \"runtime/lock/task/my-lock\" is in use","component":"task","task":"123/my-receiver/my-export/some.task/%s","node":"node2"}
+{"level":"info","message":"some message from the task (1)","component":"task","task":"123/my-receiver/my-export/some.task/%s","node":"node1"}
+{"level":"warn","message":"task failed (%s): some error (1) - expected [%s] (*task.UserError):\n- some error (1) - expected [%s]","component":"task","task":"123/my-receiver/my-export/some.task/%s","node":"node1"}
+{"level":"debug","message":"lock released \"runtime/lock/task/my-lock\"","component":"task","task":"123/my-receiver/my-export/some.task/%s","node":"node1"}
+{"level":"info","message":"started task","component":"task","task":"123/my-receiver/my-export/some.task/%s","node":"node2"}
+{"level":"debug","message":"lock acquired \"runtime/lock/task/my-lock\"","component":"task","task":"123/my-receiver/my-export/some.task/%s","node":"node2"}
+{"level":"info","message":"some message from the task (2)","component":"task","task":"123/my-receiver/my-export/some.task/%s","node":"node2"}
+{"level":"warn","message":"task failed (%s): no space right on device","component":"task","task":"123/my-receiver/my-export/some.task/%s","node":"node2"}
+{"level":"debug","message":"lock released \"runtime/lock/task/my-lock\"","component":"task","task":"123/my-receiver/my-export/some.task/%s","node":"node2"}
 `, logs.String())
 
 	// Check spans
@@ -532,7 +572,7 @@ task/123/my-receiver/my-export/some.task/%s
 					SpanID:     tel.SpanID(2),
 					TraceFlags: trace.FlagsSampled,
 				}),
-				Status: tracesdk.Status{Code: codes.Error, Description: "some error (2) - unexpected"},
+				Status: tracesdk.Status{Code: codes.Error, Description: "no space right on device"},
 				Attributes: []attribute.KeyValue{
 					attribute.String("resource.name", "some.task"),
 					attribute.String("task_id", "<dynamic>"),
@@ -545,15 +585,15 @@ task/123/my-receiver/my-export/some.task/%s
 					attribute.String("finished_at", "<dynamic>"),
 					attribute.Bool("is_success", false),
 					attribute.Bool("is_application_error", true),
-					attribute.String("error", "some error (2) - unexpected"),
-					attribute.String("error_type", "other"),
+					attribute.String("error", "no space right on device"),
+					attribute.String("error_type", "insufficientStorage"),
 				},
 				Events: []tracesdk.Event{
 					{
 						Name: "exception",
 						Attributes: []attribute.KeyValue{
-							attribute.String("exception.type", "*errors.withStack"),
-							attribute.String("exception.message", "some error (2) - unexpected"),
+							attribute.String("exception.type", "github.com/keboola/keboola-as-code/internal/pkg/service/common/errors.InsufficientStorageError"),
+							attribute.String("exception.message", "no space right on device"),
 						},
 					},
 				},
@@ -613,7 +653,7 @@ task/123/my-receiver/my-export/some.task/%s
 								attribute.String("task_type", "some.task"),
 								attribute.Bool("is_success", false),
 								attribute.Bool("is_application_error", true),
-								attribute.String("error_type", "other"),
+								attribute.String("error_type", "insufficientStorage"),
 							),
 						},
 					},
@@ -635,8 +675,9 @@ func TestTaskTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	etcdCredentials := etcdhelper.TmpNamespace(t)
-	client := etcdhelper.ClientForTest(t, etcdCredentials)
+	etcdCfg := etcdhelper.TmpNamespace(t)
+	client := etcdhelper.ClientForTest(t, etcdCfg)
+	ignoredEtcdKeys := etcdhelper.WithIgnoredKeyPattern("^(runtime/distribution/)")
 
 	lock := "my-lock"
 	taskType := "some.task"
@@ -648,13 +689,13 @@ func TestTaskTimeout(t *testing.T) {
 	tel := newTestTelemetryWithFilter(t)
 
 	// Create node and
-	node1, d := createNode(t, etcdCredentials, nil, tel, "node1")
+	node1, d := createNode(t, ctx, etcdCfg, nil, tel, "node1")
 	logger := d.DebugLogger()
 	logger.Truncate()
 	tel.Reset()
 
 	// Start task
-	_, err := node1.StartTask(task.Config{
+	_, err := node1.StartTask(ctx, task.Config{
 		Key:  tKey,
 		Type: taskType,
 		Lock: lock,
@@ -671,11 +712,14 @@ func TestTaskTimeout(t *testing.T) {
 			return task.ErrResult(errors.New("invalid state, task should time out"))
 		},
 	})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Wait for the task
-	assert.Eventually(t, func() bool {
-		return strings.Contains(logger.AllMessages(), "DEBUG  lock released")
+	assert.EventuallyWithT(t, func(c *assert.CollectT) {
+		logger.AssertJSONMessages(c, `
+{"level":"warn","message":"task failed (%s): context deadline exceeded"}
+{"level":"debug","message":"lock released%s"}
+`)
 	}, 5*time.Second, 100*time.Millisecond, logger.AllMessages())
 
 	// Check etcd state after task
@@ -692,18 +736,23 @@ task/123/my-receiver/my-export/some.task/%s
   "node": "node1",
   "lock": "runtime/lock/task/my-lock",
   "error": "context deadline exceeded",
+  "userError": {
+    "name": "unknownError",
+    "message": "Unknown error",
+    "exceptionId": "test-service-%s"
+  },
   "duration": %d
 }
 >>>>>
-`)
+`, ignoredEtcdKeys)
 
 	// Check logs
-	wildcards.Assert(t, `
-[node1][task][123/my-receiver/my-export/some.task/%s]INFO  started task
-[node1][task][123/my-receiver/my-export/some.task/%s]DEBUG  lock acquired "runtime/lock/task/my-lock"
-[node1][task][123/my-receiver/my-export/some.task/%s]WARN  task failed (%s): context deadline exceeded
-[node1][task][123/my-receiver/my-export/some.task/%s]DEBUG  lock released "runtime/lock/task/my-lock"
-`, logger.AllMessages())
+	logger.AssertJSONMessages(t, `
+{"level":"info","message":"started task","component":"task","task":"123/my-receiver/my-export/some.task/%s","node":"node1"}
+{"level":"debug","message":"lock acquired \"runtime/lock/task/my-lock\"","component":"task","task":"123/my-receiver/my-export/some.task/%s","node":"node1"}
+{"level":"warn","message":"task failed (%s): context deadline exceeded","component":"task","task":"123/my-receiver/my-export/some.task/%s","node":"node1"}
+{"level":"debug","message":"lock released \"runtime/lock/task/my-lock\"","component":"task","task":"123/my-receiver/my-export/some.task/%s","node":"node1"}
+`)
 
 	// Check spans
 	tel.AssertSpans(t,
@@ -798,11 +847,11 @@ task/123/my-receiver/my-export/some.task/%s
 func TestWorkerNodeShutdownDuringTask(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	etcdCredentials := etcdhelper.TmpNamespace(t)
-	client := etcdhelper.ClientForTest(t, etcdCredentials)
+	etcdCfg := etcdhelper.TmpNamespace(t)
+	client := etcdhelper.ClientForTest(t, etcdCfg)
 
 	lock := "my-lock"
 	taskType := "some.task"
@@ -815,7 +864,7 @@ func TestWorkerNodeShutdownDuringTask(t *testing.T) {
 	tel := newTestTelemetryWithFilter(t)
 
 	// Create node
-	node1, d := createNode(t, etcdCredentials, logs, tel, "node1")
+	node1, d := createNode(t, ctx, etcdCfg, logs, tel, "node1")
 	tel.Reset()
 	logs.Truncate()
 
@@ -823,7 +872,7 @@ func TestWorkerNodeShutdownDuringTask(t *testing.T) {
 	taskWork := make(chan struct{})
 	taskDone := make(chan struct{})
 	etcdhelper.ExpectModification(t, client, func() {
-		_, err := node1.StartTask(task.Config{
+		_, err := node1.StartTask(ctx, task.Config{
 			Key:  tKey,
 			Type: taskType,
 			Lock: lock,
@@ -833,16 +882,16 @@ func TestWorkerNodeShutdownDuringTask(t *testing.T) {
 			Operation: func(ctx context.Context, logger log.Logger) task.Result {
 				defer close(taskDone)
 				<-taskWork
-				logger.Info("some message from the task")
+				logger.Info(ctx, "some message from the task")
 				return task.OkResult("some result")
 			},
 		})
-		assert.NoError(t, err)
+		require.NoError(t, err)
 	})
 
 	// Shutdown node
 	shutdownDone := make(chan struct{})
-	d.Process().Shutdown(errors.New("some reason"))
+	d.Process().Shutdown(ctx, errors.New("some reason"))
 	go func() {
 		defer close(shutdownDone)
 		d.Process().WaitForShutdown()
@@ -879,21 +928,21 @@ task/123/my-receiver/my-export/some.task/%s
 `)
 
 	// Check logs
-	wildcards.Assert(t, `
-[node1][task][%s]INFO  started task
-[node1][task][%s]DEBUG  lock acquired "runtime/lock/task/my-lock"
-[node1]INFO  exiting (some reason)
-[node1][task]INFO  received shutdown request
-[node1][task]INFO  waiting for "1" tasks to be finished
-[node1][task][123/my-receiver/my-export/some.task/%s]INFO  some message from the task
-[node1][task][123/my-receiver/my-export/some.task/%s]INFO  task succeeded (%s): some result
-[node1][task][123/my-receiver/my-export/some.task/%s]DEBUG  lock released "runtime/lock/task/my-lock"
-[node1][task][etcd-session]INFO  closing etcd session
-[node1][task][etcd-session]INFO  closed etcd session | %s
-[node1][task]INFO  shutdown done
-[node1][etcd-client]INFO  closing etcd connection
-[node1][etcd-client]INFO  closed etcd connection | %s
-[node1]INFO  exited
+	log.AssertJSONMessages(t, `
+{"level":"info","message":"started task","component":"task","task":"123/my-receiver/my-export/some.task/%s","node":"node1"}
+{"level":"debug","message":"lock acquired \"runtime/lock/task/my-lock\"","component":"task","task":"123/my-receiver/my-export/some.task/%s","node":"node1"}
+{"level":"info","message":"exiting (some reason)"}
+{"level":"info","message":"received shutdown request","component":"task","node":"node1"}
+{"level":"info","message":"waiting for \"1\" tasks to be finished","component":"task","node":"node1"}
+{"level":"info","message":"some message from the task","component":"task","task":"123/my-receiver/my-export/some.task/%s","node":"node1"}
+{"level":"info","message":"task succeeded (%s): some result","component":"task","task":"123/my-receiver/my-export/some.task/%s","node":"node1"}
+{"level":"debug","message":"lock released \"runtime/lock/task/my-lock\"","component":"task","task":"123/my-receiver/my-export/some.task/%s","node":"node1"}
+{"level":"info","message":"closing etcd session: context canceled","component":"task.etcd.session","node":"node1"}
+{"level":"info","message":"closed etcd session","component":"task.etcd.session","node":"node1"}
+{"level":"info","message":"shutdown done","component":"task","node":"node1"}
+{"level":"info","message":"closing etcd connection","component":"etcd.client"}
+{"level":"info","message":"closed etcd connection","component":"etcd.client"}
+{"level":"info","message":"exited"}
 `, logs.String())
 }
 
@@ -901,31 +950,44 @@ func newTestTelemetryWithFilter(t *testing.T) telemetry.ForTest {
 	t.Helper()
 	return telemetry.
 		NewForTest(t).
-		SetSpanFilter(func(ctx context.Context, spanName string, opts ...trace.SpanStartOption) bool {
+		AddSpanFilter(func(ctx context.Context, spanName string, opts ...trace.SpanStartOption) bool {
 			// Ignore etcd spans
 			return !strings.HasPrefix(spanName, "etcd")
+		}).
+		AddMetricFilter(func(metric metricdata.Metrics) bool {
+			// Ignore etcd metrics
+			return !strings.HasPrefix(metric.Name, "rpc.")
 		})
 }
 
-func createNode(t *testing.T, etcdCredentials etcdclient.Credentials, logs io.Writer, tel telemetry.ForTest, nodeName string) (*task.Node, dependencies.Mocked) {
+func createNode(t *testing.T, ctx context.Context, etcdCfg etcdclient.Config, logs io.Writer, tel telemetry.ForTest, nodeID string) (*task.Node, dependencies.Mocked) {
 	t.Helper()
-	d := createDeps(t, etcdCredentials, logs, tel, nodeName)
-	node, err := task.NewNode(d)
+	d := createDeps(t, ctx, nodeID, etcdCfg, logs, tel)
+	node, err := task.NewNode(nodeID, "test-service-", d, task.NewNodeConfig())
 	require.NoError(t, err)
 	d.DebugLogger().Truncate()
 	return node, d
 }
 
-func createDeps(t *testing.T, etcdCredentials etcdclient.Credentials, logs io.Writer, tel telemetry.ForTest, nodeName string) dependencies.Mocked {
+type taskNodeDeps struct {
+	dependencies.Mocked
+	dependencies.DistributionScope
+}
+
+func createDeps(t *testing.T, ctx context.Context, nodeID string, etcdCfg etcdclient.Config, logs io.Writer, tel telemetry.ForTest) *taskNodeDeps {
 	t.Helper()
 
-	d := dependencies.NewMocked(
+	mock := dependencies.NewMocked(
 		t,
-		dependencies.WithUniqueID(nodeName),
-		dependencies.WithLoggerPrefix(fmt.Sprintf("[%s]", nodeName)),
+		ctx,
 		dependencies.WithTelemetry(tel),
-		dependencies.WithEtcdCredentials(etcdCredentials),
+		dependencies.WithEtcdConfig(etcdCfg),
 	)
+
+	d := &taskNodeDeps{
+		Mocked:            mock,
+		DistributionScope: dependencies.NewDistributionScope(nodeID, distribution.NewConfig(), mock),
+	}
 
 	// Connect logs output
 	if logs != nil {

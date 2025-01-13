@@ -13,6 +13,7 @@ import (
 	"github.com/keboola/go-utils/pkg/orderedmap"
 	"github.com/spf13/cast"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/encoding/json"
 	"github.com/keboola/keboola-as-code/internal/pkg/encoding/jsonnet"
@@ -27,6 +28,8 @@ import (
 func TestContext(t *testing.T) {
 	t.Parallel()
 
+	ctx := context.Background()
+
 	// Mocked ticket provider
 	c, httpTransport := client.NewMockedClient()
 	httpTransport.RegisterResponder(resty.MethodGet, `https://connection.keboola.com/v2/storage/?exclude=components`,
@@ -35,15 +38,15 @@ func TestContext(t *testing.T) {
 			"features": []
 		}`),
 	)
-	api, err := keboola.NewAPI(context.Background(), "https://connection.keboola.com", keboola.WithClient(&c))
-	assert.NoError(t, err)
+	api, err := keboola.NewAuthorizedAPI(context.Background(), "https://connection.keboola.com", "my-token", keboola.WithClient(&c))
+	require.NoError(t, err)
 	tickets := keboola.NewTicketProvider(context.Background(), api)
 
 	// Mocked tickets
 	var ticketResponses []*http.Response
 	for i := 1; i <= 2; i++ {
-		response, err := httpmock.NewJsonResponse(200, map[string]interface{}{"id": cast.ToString(1000 + i)})
-		assert.NoError(t, err)
+		response, err := httpmock.NewJsonResponse(200, map[string]any{"id": cast.ToString(1000 + i)})
+		require.NoError(t, err)
 		ticketResponses = append(ticketResponses, response)
 	}
 	httpTransport.RegisterResponder("POST", `=~/storage/tickets`, httpmock.ResponderFromMultipleResponses(ticketResponses))
@@ -74,7 +77,7 @@ func TestContext(t *testing.T) {
 	instanceID := "my-instance"
 
 	// Current project state
-	d := dependenciesPkg.NewMocked(t)
+	d := dependenciesPkg.NewMocked(t, ctx)
 	projectState := d.MockedState()
 	configKey := model.ConfigKey{BranchID: targetBranch.ID, ComponentID: "foo.bar", ID: "12345"}
 	rowKey := model.ConfigRowKey{BranchID: targetBranch.ID, ComponentID: "foo.bar", ConfigID: "12345", ID: "67890"}
@@ -82,14 +85,14 @@ func TestContext(t *testing.T) {
 	configMetadata.SetTemplateInstance(templateRef.Repository().Name, templateRef.TemplateID(), instanceID)
 	configMetadata.SetConfigTemplateID("my-config")
 	configMetadata.AddRowTemplateID("67890", "my-row")
-	assert.NoError(t, projectState.Set(&model.ConfigState{
+	require.NoError(t, projectState.Set(&model.ConfigState{
 		ConfigManifest: &model.ConfigManifest{ConfigKey: configKey},
 		Local: &model.Config{
 			ConfigKey: configKey,
 			Metadata:  configMetadata,
 		},
 	}))
-	assert.NoError(t, projectState.Set(&model.ConfigRowState{
+	require.NoError(t, projectState.Set(&model.ConfigRowState{
 		ConfigRowManifest: &model.ConfigRowManifest{ConfigRowKey: rowKey},
 		Local: &model.ConfigRow{
 			ConfigRowKey: rowKey,
@@ -98,7 +101,7 @@ func TestContext(t *testing.T) {
 
 	// Create context
 	fs := aferofs.NewMemoryFs()
-	ctx := NewContext(context.Background(), templateRef, fs, instanceID, targetBranch, inputsValues, map[string]*template.Input{}, tickets, testapi.MockedComponentsMap(), projectState)
+	tmplContext := NewContext(context.Background(), templateRef, fs, instanceID, targetBranch, inputsValues, map[string]*template.Input{}, tickets, testapi.MockedComponentsMap(), projectState, d.ProjectBackends())
 
 	// Check Jsonnet functions
 	code := `
@@ -133,17 +136,17 @@ func TestContext(t *testing.T) {
   }
 }
 `
-	jsonOutput, err := jsonnet.Evaluate(code, ctx.JsonnetContext())
-	assert.NoError(t, err)
-	assert.Equal(t, strings.TrimLeft(expectedJSON, "\n"), jsonOutput)
+	jsonOutput, err := jsonnet.Evaluate(code, tmplContext.JsonnetContext())
+	require.NoError(t, err)
+	assert.JSONEq(t, strings.TrimLeft(expectedJSON, "\n"), jsonOutput)
 
 	// Check tickets replacement
 	data := orderedmap.New()
 	json.MustDecodeString(jsonOutput, data)
-	replacements, err := ctx.Replacements()
-	assert.NoError(t, err)
+	replacements, err := tmplContext.Replacements()
+	require.NoError(t, err)
 	modifiedData, err := replacements.Replace(data)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	modifiedJSON := json.MustEncodeString(modifiedData, true)
 
 	expectedJSON = `
@@ -162,5 +165,5 @@ func TestContext(t *testing.T) {
   }
 }
 `
-	assert.Equal(t, strings.TrimLeft(expectedJSON, "\n"), modifiedJSON)
+	assert.JSONEq(t, strings.TrimLeft(expectedJSON, "\n"), modifiedJSON)
 }

@@ -9,8 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ccoveille/go-safecast"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/umisama/go-regexpcache"
 	"go.opentelemetry.io/otel/attribute"
 	export "go.opentelemetry.io/otel/exporters/prometheus"
 	metricsdk "go.opentelemetry.io/otel/sdk/metric"
@@ -18,7 +20,9 @@ import (
 	tracesdk "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/embedded"
 
+	"github.com/keboola/keboola-as-code/internal/pkg/encoding/json"
 	"github.com/keboola/keboola-as-code/internal/pkg/telemetry/metric/prometheus"
 )
 
@@ -29,12 +33,14 @@ const (
 
 type ForTest interface {
 	Telemetry
-	TraceID(n int) trace.TraceID
-	SpanID(n int) trace.SpanID
+	TraceID(n uint16) trace.TraceID
+	SpanID(n uint16) trace.SpanID
 	Reset()
-	SetSpanFilter(f TestSpanFilter) ForTest
+	AddSpanFilter(f TestSpanFilter) ForTest
+	AddMetricFilter(f TestMetricFilter) ForTest
 	Spans(t *testing.T, opts ...TestSpanOption) tracetest.SpanStubs
 	Metrics(t *testing.T, opts ...TestMeterOption) []metricdata.Metrics
+	MetricsJSONString(t *testing.T, opts ...TestMeterOption) string
 	AssertSpans(t *testing.T, expectedSpans tracetest.SpanStubs, opts ...TestSpanOption)
 	AssertMetrics(t *testing.T, expectedMetrics []metricdata.Metrics, opts ...TestMeterOption)
 }
@@ -48,11 +54,15 @@ type TestMeterOption func(config *assertMetricConfig)
 // TestSpanFilter returns true, if the span should be included in collected spans in a test.
 type TestSpanFilter func(ctx context.Context, spanName string, opts ...trace.SpanStartOption) bool
 
+// TestMetricFilter returns true, if the metric should be included in collected metrics in a test.
+type TestMetricFilter func(metric metricdata.Metrics) bool
+
 type assertSpanConfig struct {
 	attributeMapper TestAttributeMapper
 }
 
 type assertMetricConfig struct {
+	filters          []TestMetricFilter
 	keepHistogramSum bool
 	attributeMapper  TestAttributeMapper
 	dataPointSortKey func(attrs attribute.Set) string
@@ -64,6 +74,7 @@ type forTest struct {
 	spanExporter   *tracetest.InMemoryExporter
 	metricExporter metricsdk.Reader
 	traceProvider  *filterTraceProvider
+	metricFilters  []TestMetricFilter
 }
 
 // WithSpanAttributeMapper set a mapping function for span attributes.
@@ -85,6 +96,12 @@ func WithMeterAttributeMapper(v TestAttributeMapper) TestMeterOption {
 func WithDataPointSortKey(v func(attrs attribute.Set) string) TestMeterOption {
 	return func(cnf *assertMetricConfig) {
 		cnf.dataPointSortKey = v
+	}
+}
+
+func WithMetricFilter(v TestMetricFilter) TestMeterOption {
+	return func(cnf *assertMetricConfig) {
+		cnf.filters = append(cnf.filters, v)
 	}
 }
 
@@ -110,12 +127,12 @@ func newAssertMeterConfig(opts []TestMeterOption) assertMetricConfig {
 	return cnf
 }
 
-func NewForTest(t *testing.T) ForTest {
-	t.Helper()
+func NewForTest(tb testing.TB) ForTest {
+	tb.Helper()
 	idGenerator := &testIDGenerator{}
 	spanExporter := tracetest.NewInMemoryExporter()
 	metricExporter, err := export.New()
-	require.NoError(t, err)
+	require.NoError(tb, err)
 	tp := &filterTraceProvider{
 		provider: tracesdk.NewTracerProvider(
 			tracesdk.WithSyncer(spanExporter),
@@ -135,18 +152,23 @@ func NewForTest(t *testing.T) ForTest {
 	}
 }
 
-func (v *forTest) SetSpanFilter(f TestSpanFilter) ForTest {
-	v.traceProvider.filter = f
+func (v *forTest) AddSpanFilter(f TestSpanFilter) ForTest {
+	v.traceProvider.filters = append(v.traceProvider.filters, f)
 	v.Reset()
 	return v
 }
 
-func (v *forTest) TraceID(n int) trace.TraceID {
-	return toTraceID(testTraceIDBase + uint16(n))
+func (v *forTest) AddMetricFilter(f TestMetricFilter) ForTest {
+	v.metricFilters = append(v.metricFilters, f)
+	return v
 }
 
-func (v *forTest) SpanID(n int) trace.SpanID {
-	return toSpanID(testSpanIDBase + uint16(n))
+func (v *forTest) TraceID(n uint16) trace.TraceID {
+	return toTraceID(testTraceIDBase + n)
+}
+
+func (v *forTest) SpanID(n uint16) trace.SpanID {
+	return toSpanID(testSpanIDBase + n)
 }
 
 func (v *forTest) Reset() {
@@ -165,6 +187,18 @@ func (v *forTest) Metrics(t *testing.T, opts ...TestMeterOption) []metricdata.Me
 	return getActualMetrics(t, context.Background(), v.metricExporter, opts...)
 }
 
+func (v *forTest) MetricsJSONString(t *testing.T, opts ...TestMeterOption) string {
+	t.Helper()
+
+	// To JSON
+	str := json.MustEncodeString(v.Metrics(t, opts...), true)
+
+	// Simplify
+	str = regexpcache.MustCompile(`(?m)[\n]+^.*(Time|Min|Max|Sum|BucketCounts).*$`).ReplaceAllString(str, "")
+	str = regexpcache.MustCompile(`(?m)[\n]+^.*"Bounds": \[[\s\n\d,]+\].*$`).ReplaceAllString(str, "")
+	return str
+}
+
 func (v *forTest) AssertSpans(t *testing.T, expectedSpans tracetest.SpanStubs, opts ...TestSpanOption) {
 	t.Helper()
 	actualSpans := v.Spans(t, opts...)
@@ -177,7 +211,7 @@ func (v *forTest) AssertSpans(t *testing.T, expectedSpans tracetest.SpanStubs, o
 	spansCount := (int)(math.Max((float64)(len(expectedSpans)), (float64)(len(actualSpans))))
 	var actualSpan tracetest.SpanStub
 	var expectedSpan tracetest.SpanStub
-	for i := 0; i < spansCount; i++ {
+	for i := range spansCount {
 		if len(actualSpans) > i {
 			actualSpan = actualSpans[i]
 		} else {
@@ -196,6 +230,12 @@ func (v *forTest) AssertSpans(t *testing.T, expectedSpans tracetest.SpanStubs, o
 
 func (v *forTest) AssertMetrics(t *testing.T, expectedMetrics []metricdata.Metrics, opts ...TestMeterOption) {
 	t.Helper()
+
+	// Add global filters
+	for _, f := range v.metricFilters {
+		opts = append(opts, WithMetricFilter(f))
+	}
+
 	actualMetrics := v.Metrics(t, opts...)
 
 	// Compare metrics one by one, for easier debugging
@@ -206,7 +246,7 @@ func (v *forTest) AssertMetrics(t *testing.T, expectedMetrics []metricdata.Metri
 	metersCount := (int)(math.Max((float64)(len(expectedMetrics)), (float64)(len(actualMetrics))))
 	var actualMeter metricdata.Metrics
 	var expectedMeter metricdata.Metrics
-	for i := 0; i < metersCount; i++ {
+	for i := range metersCount {
 		if len(actualMetrics) > i {
 			actualMeter = actualMetrics[i]
 		} else {
@@ -224,11 +264,13 @@ func (v *forTest) AssertMetrics(t *testing.T, expectedMetrics []metricdata.Metri
 }
 
 type filterTraceProvider struct {
-	filter   TestSpanFilter
+	embedded.TracerProvider
+	filters  []TestSpanFilter
 	provider trace.TracerProvider
 }
 
 type filterTracer struct {
+	embedded.Tracer
 	tp     *filterTraceProvider
 	tracer trace.Tracer
 }
@@ -238,9 +280,19 @@ func (tp *filterTraceProvider) Tracer(name string, opts ...trace.TracerOption) t
 }
 
 func (t *filterTracer) Start(ctx context.Context, spanName string, opts ...trace.SpanStartOption) (context.Context, trace.Span) {
-	if t.tp.filter != nil && !t.tp.filter(ctx, spanName, opts...) {
+	// Invoke filters
+	include := true
+	for _, f := range t.tp.filters {
+		if !f(ctx, spanName, opts...) {
+			include = false
+			break
+		}
+	}
+
+	if !include {
 		return nopTracer.Start(ctx, spanName, opts...)
 	}
+
 	return t.tracer.Start(ctx, spanName, opts...)
 }
 
@@ -256,13 +308,22 @@ func (g *testIDGenerator) Reset() {
 
 func (g *testIDGenerator) NewIDs(ctx context.Context) (trace.TraceID, trace.SpanID) {
 	v := g.traceID.Add(1)
-	traceID := toTraceID(testTraceIDBase + uint16(v))
+	i, err := safecast.ToUint16(v)
+	if err != nil {
+		panic(err)
+	}
+
+	traceID := toTraceID(testTraceIDBase + i)
 	return traceID, g.NewSpanID(ctx, traceID)
 }
 
 func (g *testIDGenerator) NewSpanID(_ context.Context, _ trace.TraceID) trace.SpanID {
 	v := g.spanID.Add(1)
-	return toSpanID(testSpanIDBase + uint16(v))
+	i, err := safecast.ToUint16(v)
+	if err != nil {
+		panic(err)
+	}
+	return toSpanID(testSpanIDBase + i)
 }
 
 func toTraceID(in uint16) trace.TraceID { //nolint: unparam
@@ -298,8 +359,10 @@ func cleanAndSortSpans(spans tracetest.SpanStubs, opts ...TestSpanOption) {
 		s.StartTime = time.Time{}
 		s.EndTime = time.Time{}
 		s.Resource = nil
-		s.InstrumentationLibrary.Name = ""
-		s.InstrumentationLibrary.Version = ""
+		s.InstrumentationScope.Name = ""
+		s.InstrumentationScope.Version = ""
+		s.InstrumentationLibrary.Name = ""    // nolint: staticcheck
+		s.InstrumentationLibrary.Version = "" // nolint: staticcheck
 		for j := range s.Events {
 			event := &s.Events[j]
 			event.Time = time.Time{}
@@ -315,19 +378,36 @@ func cleanAndSortSpans(spans tracetest.SpanStubs, opts ...TestSpanOption) {
 func getActualMetrics(t *testing.T, ctx context.Context, reader metricsdk.Reader, opts ...TestMeterOption) (out []metricdata.Metrics) {
 	t.Helper()
 	all := &metricdata.ResourceMetrics{}
-	assert.NoError(t, reader.Collect(ctx, all))
+	require.NoError(t, reader.Collect(ctx, all))
 	sort.SliceStable(all.ScopeMetrics, func(i, j int) bool {
 		return all.ScopeMetrics[i].Scope.Name < all.ScopeMetrics[j].Scope.Name
 	})
 	for _, item := range all.ScopeMetrics {
 		out = append(out, item.Metrics...)
 	}
-	cleanAndSortMetrics(out, opts...)
+	cleanAndSortMetrics(&out, opts...)
 	return out
 }
 
-func cleanAndSortMetrics(metrics []metricdata.Metrics, opts ...TestMeterOption) {
+func cleanAndSortMetrics(metrics *[]metricdata.Metrics, opts ...TestMeterOption) {
 	cfg := newAssertMeterConfig(opts)
+
+	// Filter
+	var filtered []metricdata.Metrics
+	for _, metric := range *metrics {
+		// Invoke filters
+		include := true
+		for _, f := range cfg.filters {
+			if !f(metric) {
+				include = false
+				break
+			}
+		}
+
+		if include {
+			filtered = append(filtered, metric)
+		}
+	}
 
 	// DataPoints have random order, sort them by statusCode and URL.
 	dataPointKey := func(attrs attribute.Set) string {
@@ -349,8 +429,8 @@ func cleanAndSortMetrics(metrics []metricdata.Metrics, opts ...TestMeterOption) 
 	}
 
 	// Clear dynamic values
-	for i := range metrics {
-		item := &metrics[i]
+	for i := range filtered {
+		item := &filtered[i]
 
 		switch record := item.Data.(type) {
 		case metricdata.Sum[int64]:
@@ -362,6 +442,7 @@ func cleanAndSortMetrics(metrics []metricdata.Metrics, opts ...TestMeterOption) 
 				point.StartTime = time.Time{}
 				point.Time = time.Time{}
 				point.Attributes = mapAttributes(point.Attributes)
+				point.Exemplars = nil
 			}
 		case metricdata.Sum[float64]:
 			sort.SliceStable(record.DataPoints, func(i, j int) bool {
@@ -372,6 +453,7 @@ func cleanAndSortMetrics(metrics []metricdata.Metrics, opts ...TestMeterOption) 
 				point.StartTime = time.Time{}
 				point.Time = time.Time{}
 				point.Attributes = mapAttributes(point.Attributes)
+				point.Exemplars = nil
 			}
 		case metricdata.Histogram[int64]:
 			sort.SliceStable(record.DataPoints, func(i, j int) bool {
@@ -388,6 +470,7 @@ func cleanAndSortMetrics(metrics []metricdata.Metrics, opts ...TestMeterOption) 
 					point.Sum = 0
 				}
 				point.Attributes = mapAttributes(point.Attributes)
+				point.Exemplars = nil
 			}
 		case metricdata.Histogram[float64]:
 			sort.SliceStable(record.DataPoints, func(i, j int) bool {
@@ -404,7 +487,11 @@ func cleanAndSortMetrics(metrics []metricdata.Metrics, opts ...TestMeterOption) 
 					point.Sum = 0
 				}
 				point.Attributes = mapAttributes(point.Attributes)
+				point.Exemplars = nil
 			}
 		}
 	}
+
+	// Update the slice
+	*metrics = filtered
 }

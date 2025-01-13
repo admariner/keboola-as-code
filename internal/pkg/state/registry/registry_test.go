@@ -1,9 +1,11 @@
 package registry
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem"
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem/aferofs"
@@ -14,59 +16,59 @@ import (
 
 func TestNewState(t *testing.T) {
 	t.Parallel()
-	s := New(knownpaths.NewNop(), naming.NewRegistry(), NewComponentsMap(nil), SortByPath)
+	s := New(knownpaths.NewNop(context.Background()), naming.NewRegistry(), NewComponentsMap(nil), SortByPath)
 	assert.NotNil(t, s)
 }
 
 func TestStateComponents(t *testing.T) {
 	t.Parallel()
-	s := newTestState(t, knownpaths.NewNop())
+	s := newTestState(t, knownpaths.NewNop(context.Background()))
 	assert.NotNil(t, s.Components())
 }
 
 func TestStateAll(t *testing.T) {
 	t.Parallel()
-	s := newTestState(t, knownpaths.NewNop())
+	s := newTestState(t, knownpaths.NewNop(context.Background()))
 	assert.Len(t, s.All(), 6)
 }
 
 func TestStateBranches(t *testing.T) {
 	t.Parallel()
-	s := newTestState(t, knownpaths.NewNop())
+	s := newTestState(t, knownpaths.NewNop(context.Background()))
 	assert.Len(t, s.Branches(), 2)
 }
 
 func TestStateConfigs(t *testing.T) {
 	t.Parallel()
-	s := newTestState(t, knownpaths.NewNop())
+	s := newTestState(t, knownpaths.NewNop(context.Background()))
 	assert.Len(t, s.Configs(), 2)
 }
 
 func TestStateConfigRows(t *testing.T) {
 	t.Parallel()
-	s := newTestState(t, knownpaths.NewNop())
+	s := newTestState(t, knownpaths.NewNop(context.Background()))
 	assert.Len(t, s.ConfigRows(), 2)
 }
 
 func TestStateConfigsFrom(t *testing.T) {
 	t.Parallel()
-	s := newTestState(t, knownpaths.NewNop())
+	s := newTestState(t, knownpaths.NewNop(context.Background()))
 	assert.Len(t, s.ConfigsFrom(BranchKey{ID: 123}), 2)
-	assert.Len(t, s.ConfigsFrom(BranchKey{ID: 567}), 0)
-	assert.Len(t, s.ConfigsFrom(BranchKey{ID: 111}), 0)
+	assert.Empty(t, s.ConfigsFrom(BranchKey{ID: 567}))
+	assert.Empty(t, s.ConfigsFrom(BranchKey{ID: 111}))
 }
 
 func TestStateConfigRowsFrom(t *testing.T) {
 	t.Parallel()
-	s := newTestState(t, knownpaths.NewNop())
+	s := newTestState(t, knownpaths.NewNop(context.Background()))
 	assert.Len(t, s.ConfigRowsFrom(ConfigKey{BranchID: 123, ComponentID: "keboola.bar", ID: `678`}), 2)
-	assert.Len(t, s.ConfigRowsFrom(ConfigKey{BranchID: 123, ComponentID: "keboola.bar", ID: `345`}), 0)
-	assert.Len(t, s.ConfigRowsFrom(ConfigKey{BranchID: 123, ComponentID: "keboola.bar", ID: `111`}), 0)
+	assert.Empty(t, s.ConfigRowsFrom(ConfigKey{BranchID: 123, ComponentID: "keboola.bar", ID: `345`}))
+	assert.Empty(t, s.ConfigRowsFrom(ConfigKey{BranchID: 123, ComponentID: "keboola.bar", ID: `111`}))
 }
 
 func TestStateGet(t *testing.T) {
 	t.Parallel()
-	s := newTestState(t, knownpaths.NewNop())
+	s := newTestState(t, knownpaths.NewNop(context.Background()))
 	state, found := s.Get(BranchKey{ID: 567})
 	assert.NotNil(t, state)
 	assert.True(t, found)
@@ -74,7 +76,7 @@ func TestStateGet(t *testing.T) {
 
 func TestStateGetNotFound(t *testing.T) {
 	t.Parallel()
-	s := newTestState(t, knownpaths.NewNop())
+	s := newTestState(t, knownpaths.NewNop(context.Background()))
 	state, found := s.Get(BranchKey{ID: 111})
 	assert.Nil(t, state)
 	assert.False(t, found)
@@ -82,13 +84,13 @@ func TestStateGetNotFound(t *testing.T) {
 
 func TestStateMustGet(t *testing.T) {
 	t.Parallel()
-	s := newTestState(t, knownpaths.NewNop())
+	s := newTestState(t, knownpaths.NewNop(context.Background()))
 	assert.Equal(t, "Foo Bar Branch", s.MustGet(BranchKey{ID: 567}).ObjectName())
 }
 
 func TestStateMustGetNotFound(t *testing.T) {
 	t.Parallel()
-	s := newTestState(t, knownpaths.NewNop())
+	s := newTestState(t, knownpaths.NewNop(context.Background()))
 	assert.PanicsWithError(t, `branch "111" not found`, func() {
 		s.MustGet(BranchKey{ID: 111})
 	})
@@ -97,11 +99,12 @@ func TestStateMustGetNotFound(t *testing.T) {
 func TestStateTrackRecordNotPersisted(t *testing.T) {
 	t.Parallel()
 	fs := aferofs.NewMemoryFs()
-	assert.NoError(t, fs.WriteFile(filesystem.NewRawFile(`foo/bar1`, `foo`)))
-	assert.NoError(t, fs.WriteFile(filesystem.NewRawFile(`foo/bar2`, `foo`)))
-	assert.NoError(t, fs.WriteFile(filesystem.NewRawFile(`foo/bar3`, `foo`)))
-	paths, err := knownpaths.New(fs)
-	assert.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, fs.WriteFile(ctx, filesystem.NewRawFile(`foo/bar1`, `foo`)))
+	require.NoError(t, fs.WriteFile(ctx, filesystem.NewRawFile(`foo/bar2`, `foo`)))
+	require.NoError(t, fs.WriteFile(ctx, filesystem.NewRawFile(`foo/bar3`, `foo`)))
+	paths, err := knownpaths.New(ctx, fs)
+	require.NoError(t, err)
 	s := newTestState(t, paths)
 
 	record := &ConfigManifest{
@@ -122,11 +125,12 @@ func TestStateTrackRecordNotPersisted(t *testing.T) {
 func TestStateTrackRecordValid(t *testing.T) {
 	t.Parallel()
 	fs := aferofs.NewMemoryFs()
-	assert.NoError(t, fs.WriteFile(filesystem.NewRawFile(`foo/bar1`, `foo`)))
-	assert.NoError(t, fs.WriteFile(filesystem.NewRawFile(`foo/bar2`, `foo`)))
-	assert.NoError(t, fs.WriteFile(filesystem.NewRawFile(`foo/bar3`, `foo`)))
-	paths, err := knownpaths.New(fs)
-	assert.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, fs.WriteFile(ctx, filesystem.NewRawFile(`foo/bar1`, `foo`)))
+	require.NoError(t, fs.WriteFile(ctx, filesystem.NewRawFile(`foo/bar2`, `foo`)))
+	require.NoError(t, fs.WriteFile(ctx, filesystem.NewRawFile(`foo/bar3`, `foo`)))
+	paths, err := knownpaths.New(ctx, fs)
+	require.NoError(t, err)
 	s := newTestState(t, paths)
 
 	record := &ConfigManifest{
@@ -146,12 +150,13 @@ func TestStateTrackRecordValid(t *testing.T) {
 
 func TestStateTrackRecordInvalid(t *testing.T) {
 	t.Parallel()
+	ctx := context.Background()
 	fs := aferofs.NewMemoryFs()
-	assert.NoError(t, fs.WriteFile(filesystem.NewRawFile(`foo/bar1`, `foo`)))
-	assert.NoError(t, fs.WriteFile(filesystem.NewRawFile(`foo/bar2`, `foo`)))
-	assert.NoError(t, fs.WriteFile(filesystem.NewRawFile(`foo/bar3`, `foo`)))
-	paths, err := knownpaths.New(fs)
-	assert.NoError(t, err)
+	require.NoError(t, fs.WriteFile(ctx, filesystem.NewRawFile(`foo/bar1`, `foo`)))
+	require.NoError(t, fs.WriteFile(ctx, filesystem.NewRawFile(`foo/bar2`, `foo`)))
+	require.NoError(t, fs.WriteFile(ctx, filesystem.NewRawFile(`foo/bar3`, `foo`)))
+	paths, err := knownpaths.New(ctx, fs)
+	require.NoError(t, err)
 	s := newTestState(t, paths)
 
 	record := &ConfigManifest{
@@ -173,7 +178,8 @@ func TestStateTrackRecordInvalid(t *testing.T) {
 
 func TestRegistry_GetPath(t *testing.T) {
 	t.Parallel()
-	registry := New(knownpaths.NewNop(), naming.NewRegistry(), NewComponentsMap(nil), SortByPath)
+	ctx := context.Background()
+	registry := New(knownpaths.NewNop(ctx), naming.NewRegistry(), NewComponentsMap(nil), SortByPath)
 
 	// Not found
 	path, found := registry.GetPath(BranchKey{ID: 123})
@@ -181,7 +187,7 @@ func TestRegistry_GetPath(t *testing.T) {
 	assert.False(t, found)
 
 	// Add branch
-	assert.NoError(t, registry.Set(&BranchState{
+	require.NoError(t, registry.Set(&BranchState{
 		BranchManifest: &BranchManifest{
 			BranchKey: BranchKey{ID: 123},
 			Paths: Paths{
@@ -198,7 +204,8 @@ func TestRegistry_GetPath(t *testing.T) {
 
 func TestRegistry_GetByPath(t *testing.T) {
 	t.Parallel()
-	registry := New(knownpaths.NewNop(), naming.NewRegistry(), NewComponentsMap(nil), SortByPath)
+	ctx := context.Background()
+	registry := New(knownpaths.NewNop(ctx), naming.NewRegistry(), NewComponentsMap(nil), SortByPath)
 
 	// Not found
 	objectState, found := registry.GetByPath(`my-branch`)
@@ -214,7 +221,7 @@ func TestRegistry_GetByPath(t *testing.T) {
 			},
 		},
 	}
-	assert.NoError(t, registry.Set(branchState))
+	require.NoError(t, registry.Set(branchState))
 
 	// Found
 	objectState, found = registry.GetByPath(`my-branch`)
@@ -238,7 +245,7 @@ func newTestState(t *testing.T, paths *knownpaths.Paths) *Registry {
 			IsDefault: true,
 		},
 	}
-	assert.NoError(t, registry.Set(branch1))
+	require.NoError(t, registry.Set(branch1))
 
 	// Branch 2
 	branch2Key := BranchKey{ID: 567}
@@ -251,7 +258,7 @@ func newTestState(t *testing.T, paths *knownpaths.Paths) *Registry {
 			IsDefault: false,
 		},
 	}
-	assert.NoError(t, registry.Set(branch2))
+	require.NoError(t, registry.Set(branch2))
 
 	// Config 1
 	config1Key := ConfigKey{BranchID: 123, ComponentID: "keboola.foo", ID: `345`}
@@ -261,7 +268,7 @@ func newTestState(t *testing.T, paths *knownpaths.Paths) *Registry {
 			Name: "Config 1",
 		},
 	}
-	assert.NoError(t, registry.Set(config1))
+	require.NoError(t, registry.Set(config1))
 
 	// Config 2
 	config2Key := ConfigKey{BranchID: 123, ComponentID: "keboola.bar", ID: `678`}
@@ -271,7 +278,7 @@ func newTestState(t *testing.T, paths *knownpaths.Paths) *Registry {
 			Name: "Config 2",
 		},
 	}
-	assert.NoError(t, registry.Set(config2))
+	require.NoError(t, registry.Set(config2))
 
 	// Config Row 1
 	row1Key := ConfigRowKey{BranchID: 123, ComponentID: "keboola.bar", ConfigID: `678`, ID: `12`}
@@ -281,7 +288,7 @@ func newTestState(t *testing.T, paths *knownpaths.Paths) *Registry {
 			Name: "Config Row 1",
 		},
 	}
-	assert.NoError(t, registry.Set(row1))
+	require.NoError(t, registry.Set(row1))
 
 	// Config Row 2
 	row2Key := ConfigRowKey{BranchID: 123, ComponentID: "keboola.bar", ConfigID: `678`, ID: `34`}
@@ -291,7 +298,7 @@ func newTestState(t *testing.T, paths *knownpaths.Paths) *Registry {
 			Name: "Config Row 2",
 		},
 	}
-	assert.NoError(t, registry.Set(row2))
+	require.NoError(t, registry.Set(row2))
 
 	return registry
 }

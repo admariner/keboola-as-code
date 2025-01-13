@@ -8,13 +8,11 @@ import (
 
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem"
 	"github.com/keboola/keboola-as-code/internal/pkg/log"
-	"github.com/keboola/keboola-as-code/internal/pkg/service/cli/options"
 	"github.com/keboola/keboola-as-code/internal/pkg/telemetry"
 )
 
 type dependencies interface {
 	Logger() log.Logger
-	Options() *options.Options
 	Telemetry() telemetry.Telemetry
 	StorageAPIToken() keboola.Token
 }
@@ -30,7 +28,7 @@ func Run(ctx context.Context, fs filesystem.Fs, d dependencies) (err error) {
 	envLocalLines := []filesystem.FileLine{
 		{Regexp: "^KBC_STORAGE_API_TOKEN=", Line: fmt.Sprintf(`KBC_STORAGE_API_TOKEN="%s"`, d.StorageAPIToken().Token)},
 	}
-	if err := createFile(logger, fs, ".env.local", envLocalMsg, envLocalLines); err != nil {
+	if err := createFile(ctx, logger, fs, ".env.local", envLocalMsg, envLocalLines); err != nil {
 		return err
 	}
 
@@ -39,7 +37,7 @@ func Run(ctx context.Context, fs filesystem.Fs, d dependencies) (err error) {
 	envDistLines := []filesystem.FileLine{
 		{Regexp: "^KBC_STORAGE_API_TOKEN=", Line: `KBC_STORAGE_API_TOKEN=`},
 	}
-	if err := createFile(logger, fs, ".env.dist", envDistMsg, envDistLines); err != nil {
+	if err := createFile(ctx, logger, fs, ".env.dist", envDistMsg, envDistLines); err != nil {
 		return err
 	}
 
@@ -47,24 +45,25 @@ func Run(ctx context.Context, fs filesystem.Fs, d dependencies) (err error) {
 	gitIgnoreMsg := ` - to keep ".env.local" local`
 	gitIgnoreLines := []filesystem.FileLine{
 		{Line: "/.env.local"},
+		{Line: "/.keboola/project.json"},
 	}
-	if err := createFile(logger, fs, ".gitignore", gitIgnoreMsg, gitIgnoreLines); err != nil {
+	if err := createFile(ctx, logger, fs, ".gitignore", gitIgnoreMsg, gitIgnoreLines); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func createFile(logger log.Logger, fs filesystem.Fs, path, desc string, lines []filesystem.FileLine) error {
-	updated, err := fs.CreateOrUpdateFile(filesystem.NewFileDef(path).SetDescription(desc), lines)
+func createFile(ctx context.Context, logger log.Logger, fs filesystem.Fs, path, desc string, lines []filesystem.FileLine) error {
+	updated, err := fs.CreateOrUpdateFile(ctx, filesystem.NewFileDef(path).SetDescription(desc), lines)
 	if err != nil {
 		return err
 	}
 
 	if updated {
-		logger.Infof("Updated file \"%s\"%s.", path, desc)
+		logger.Infof(ctx, "Updated file \"%s\"%s.", path, desc)
 	} else {
-		logger.Infof("Created file \"%s\"%s.", path, desc)
+		logger.Infof(ctx, "Created file \"%s\"%s.", path, desc)
 	}
 
 	return nil

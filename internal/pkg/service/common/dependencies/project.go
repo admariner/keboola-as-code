@@ -4,11 +4,13 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/keboola/go-client/pkg/keboola"
 	"github.com/spf13/cast"
 	"go.opentelemetry.io/otel/attribute"
 
+	"github.com/keboola/keboola-as-code/internal/pkg/service/common/ctxattr"
 	"github.com/keboola/keboola-as-code/internal/pkg/service/common/httpserver/middleware"
 	"github.com/keboola/keboola-as-code/internal/pkg/utils/errors"
 	"github.com/keboola/keboola-as-code/internal/pkg/utils/strhelper"
@@ -18,7 +20,7 @@ import (
 type projectScope struct {
 	token             keboola.Token
 	projectFeatures   keboola.FeaturesMap
-	keboolaProjectAPI *keboola.API
+	keboolaProjectAPI *keboola.AuthorizedAPI
 }
 
 type projectScopeDeps interface {
@@ -68,8 +70,15 @@ func NewProjectDeps(ctx context.Context, prjScp projectScopeDeps, tokenStr strin
 	if err != nil {
 		return nil, err
 	}
-	prjScp.Logger().Debugf("Storage API token is valid.")
-	prjScp.Logger().Debugf(`Project id: "%d", project name: "%s".`, token.ProjectID(), token.ProjectName())
+
+	ctx = ctxattr.ContextWith(
+		ctx,
+		attribute.String("projectId", cast.ToString(token.Owner.ID)),
+		attribute.String("tokenId", token.ID),
+	)
+
+	prjScp.Logger().Debugf(ctx, "Storage API token is valid.")
+	prjScp.Logger().Debugf(ctx, `Project id: "%d", project name: "%s".`, token.ProjectID(), token.ProjectName())
 
 	// Set attributes after token verification
 	if reqSpan != nil {
@@ -94,7 +103,7 @@ func newProjectScope(ctx context.Context, prjScp projectScopeDeps, token keboola
 	}
 
 	httpClient := prjScp.HTTPClient()
-	api, err := keboola.NewAPI(ctx, prjScp.StorageAPIHost(), keboola.WithClient(&httpClient), keboola.WithToken(token.Token))
+	api, err := keboola.NewAuthorizedAPI(ctx, prjScp.StorageAPIHost(), token.Token, keboola.WithClient(&httpClient), keboola.WithOnSuccessTimeout(1*time.Minute))
 	if err != nil {
 		return nil, err
 	}
@@ -111,6 +120,18 @@ func (v *projectScope) check() {
 	if v == nil {
 		panic(errors.New("dependencies project scope is not initialized"))
 	}
+}
+
+func (v *projectScope) ProjectBackends() []string {
+	var backends []string
+
+	if v.token.Owner.HasSnowflake {
+		backends = append(backends, "snowflake")
+	}
+	if v.token.Owner.HasBigquery {
+		backends = append(backends, "bigquery")
+	}
+	return backends
 }
 
 func (v *projectScope) ProjectID() keboola.ProjectID {
@@ -138,7 +159,7 @@ func (v *projectScope) StorageAPITokenID() string {
 	return v.token.ID
 }
 
-func (v *projectScope) KeboolaProjectAPI() *keboola.API {
+func (v *projectScope) KeboolaProjectAPI() *keboola.AuthorizedAPI {
 	v.check()
 	return v.keboolaProjectAPI
 }

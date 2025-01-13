@@ -27,29 +27,29 @@ func Run(ctx context.Context, projectState *project.State, o Options, d dependen
 	logger := d.Logger()
 
 	// Diff
-	results, err = createDiff.Run(ctx, createDiff.Options{Objects: projectState}, d)
+	results, err = createDiff.Run(ctx, createDiff.Options{Objects: projectState}, d, diff.WithIgnoreBranchName(projectState.ProjectManifest().AllowTargetENV()))
 	if err != nil {
 		return nil, err
 	}
 
 	// Log untracked paths
 	if o.LogUntrackedPaths {
-		projectState.LogUntrackedPaths(logger)
+		projectState.LogUntrackedPaths(ctx, logger)
 	}
 
 	if results.Equal {
-		logger.Info("No difference.")
+		logger.Info(ctx, "No difference.")
 	} else {
 		// Explain
-		logger.Info(diff.ChangeMark + " changed")
-		logger.Info(diff.OnlyInRemoteMark + " remote state")
-		logger.Info(diff.OnlyInLocalMark + " local state")
-		logger.Info("")
+		logger.Info(ctx, diff.ChangeMark+" changed")
+		logger.Info(ctx, diff.OnlyInRemoteMark+" remote state")
+		logger.Info(ctx, diff.OnlyInLocalMark+" local state")
+		logger.Info(ctx, "")
 
 		// Print diff
-		logger.Info("Diff:")
+		logger.Info(ctx, "Diff:")
 		for _, line := range results.Format(o.PrintDetails) {
-			logger.Info(line)
+			logger.Info(ctx, line)
 		}
 	}
 

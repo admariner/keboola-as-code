@@ -7,6 +7,7 @@ import (
 	"github.com/keboola/go-client/pkg/keboola"
 	"github.com/keboola/go-utils/pkg/orderedmap"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/encoding/json"
 	"github.com/keboola/keboola-as-code/internal/pkg/model"
@@ -37,13 +38,13 @@ func TestLocalCreateConfigDefaultContent(t *testing.T) {
 		ID:          "456",
 	}
 	object, err := manager.createObject(key, "New Config")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Assert
 	config := object.(*model.Config)
 	assert.Equal(t, key, config.Key())
 	assert.Equal(t, "New Config", config.Name)
-	expectedContent := `{"configValue":123,"configObject":{"Key":"foo","Value":"bar"}}`
+	expectedContent := `{"parameters":{"configValue":123,"configObject":{"Key":"foo","Value":"bar"}}}`
 	assert.Equal(t, expectedContent, json.MustEncodeString(config.Content, false))
 }
 
@@ -74,13 +75,13 @@ func TestLocalCreateConfigRowDefaultContent(t *testing.T) {
 		ID:          "789",
 	}
 	object, err := manager.createObject(key, "New Row")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Assert
 	row := object.(*model.ConfigRow)
 	assert.Equal(t, key, row.Key())
 	assert.Equal(t, "New Row", row.Name)
-	expectedContent := `{"configValue":123,"configObject":{"Key":"foo","Value":"bar"}}`
+	expectedContent := `{"parameters":{"configValue":123,"configObject":{"Key":"foo","Value":"bar"}}}`
 	assert.Equal(t, expectedContent, json.MustEncodeString(row.Content, false))
 }
 
@@ -101,13 +102,13 @@ func TestLocalCreateConfigContentFromSchema(t *testing.T) {
 		ID:          "456",
 	}
 	object, err := manager.createObject(key, "New Config")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Assert
 	config := object.(*model.Config)
 	assert.Equal(t, key, config.Key())
 	assert.Equal(t, "New Config", config.Name)
-	expectedContent := `{"bar":{"type":"abc"},"baz":{"type":789}}`
+	expectedContent := `{"parameters":{"bar":{"type":"abc"},"baz":{"type":789}}}`
 	assert.Equal(t, expectedContent, json.MustEncodeString(config.Content, false))
 }
 
@@ -129,13 +130,13 @@ func TestLocalCreateConfigRowContentFromSchema(t *testing.T) {
 		ID:          "789",
 	}
 	object, err := manager.createObject(key, "New Row")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Assert
 	row := object.(*model.ConfigRow)
 	assert.Equal(t, key, row.Key())
 	assert.Equal(t, "New Row", row.Name)
-	expectedContent := `{"bar":{"type":"abc"},"baz":{"type":789}}`
+	expectedContent := `{"parameters":{"bar":{"type":"abc"},"baz":{"type":789}}}`
 	assert.Equal(t, expectedContent, json.MustEncodeString(row.Content, false))
 }
 
@@ -152,7 +153,7 @@ func TestLocalCreateConfigEmptyContent(t *testing.T) {
 		ID:          "456",
 	}
 	object, err := manager.createObject(key, "New Config")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Assert
 	config := object.(*model.Config)
@@ -177,7 +178,7 @@ func TestLocalCreateConfigRowEmptyContent(t *testing.T) {
 		ID:          "789",
 	}
 	object, err := manager.createObject(key, "New Row")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Assert
 	row := object.(*model.ConfigRow)

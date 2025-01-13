@@ -1,11 +1,13 @@
 package rename
 
 import (
+	"context"
 	"runtime"
 	"testing"
 
 	"github.com/jarcoal/httpmock"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/env"
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem"
@@ -21,31 +23,31 @@ func TestRenameAllPlan(t *testing.T) {
 	_, testFile, _, _ := runtime.Caller(0)
 	testDir := filesystem.Dir(testFile)
 	fs := testFs(t, filesystem.Join(testDir, "..", "..", "fixtures", "local", "to-rename"))
-	d := dependencies.NewMocked(t)
+	d := dependencies.NewMocked(t, context.Background())
 
 	// Mocked API response
-	getGenericExResponder, err := httpmock.NewJsonResponder(200, map[string]interface{}{
+	getGenericExResponder, err := httpmock.NewJsonResponder(200, map[string]any{
 		"id":   "ex-generic-v2",
 		"type": "extractor",
 		"name": "Generic",
 	})
-	assert.NoError(t, err)
-	getMySQLExResponder, err := httpmock.NewJsonResponder(200, map[string]interface{}{
+	require.NoError(t, err)
+	getMySQLExResponder, err := httpmock.NewJsonResponder(200, map[string]any{
 		"id":   "keboola.ex-db-mysql",
 		"type": "extractor",
 		"name": "MySQL",
 	})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	d.MockedHTTPTransport().RegisterResponder("GET", `=~/storage/components/ex-generic-v2`, getGenericExResponder.Once())
 	d.MockedHTTPTransport().RegisterResponder("GET", `=~/storage/components/keboola.ex-db-mysql`, getMySQLExResponder.Once())
 
 	// Load state
 	projectState, err := d.MockedProject(fs).LoadState(loadState.Options{LoadLocalState: true}, d)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Get rename plan
 	plan, err := NewPlan(projectState.State())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Clear manifest records before assert
 	for _, action := range plan.actions {
@@ -92,6 +94,8 @@ func testFs(t *testing.T, inputDir string) filesystem.Fs {
 	envs := env.Empty()
 	envs.Set("LOCAL_PROJECT_ID", "12345")
 	envs.Set("TEST_KBC_STORAGE_API_HOST", "foo.bar")
-	testhelper.MustReplaceEnvsDir(fs, `/`, envs)
+	err := testhelper.ReplaceEnvsDir(context.Background(), fs, `/`, envs)
+	require.NoError(t, err)
+
 	return fs
 }

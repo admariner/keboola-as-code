@@ -57,6 +57,7 @@ type Context struct {
 	components        *model.ComponentsMap
 	placeholdersCount int
 	ticketsResolved   bool
+	projectBackends   []string
 
 	lock          *sync.Mutex
 	placeholders  PlaceholdersMap
@@ -68,11 +69,11 @@ type Context struct {
 type _context context.Context
 
 // PlaceholdersMap -  original template value -> placeholder.
-type PlaceholdersMap map[interface{}]Placeholder
+type PlaceholdersMap map[any]Placeholder
 
 type Placeholder struct {
-	asString string      // placeholder as string for use in Json file, eg. string("<<~~placeholder:1~~>>)
-	asValue  interface{} // eg. ConfigId, RowID, eg. ConfigId("<<~~placeholder:1~~>>)
+	asString string // placeholder as string for use in Json file, eg. string("<<~~placeholder:1~~>>)
+	asValue  any    // eg. ConfigId, RowID, eg. ConfigId("<<~~placeholder:1~~>>)
 }
 
 func (v Placeholder) Value() any {
@@ -81,7 +82,7 @@ func (v Placeholder) Value() any {
 
 type PlaceholderResolver func(p Placeholder, cb ResolveCallback)
 
-type ResolveCallback func(newID interface{})
+type ResolveCallback func(newID any)
 
 type inputUsageNotifier struct {
 	*Context
@@ -94,7 +95,7 @@ const (
 	instanceIDShortLength = 8
 )
 
-func NewContext(ctx context.Context, templateRef model.TemplateRef, objectsRoot filesystem.Fs, instanceID string, targetBranch model.BranchKey, inputsValues template.InputsValues, inputsDefsMap map[string]*template.Input, tickets *keboola.TicketProvider, components *model.ComponentsMap, projectState *state.State) *Context {
+func NewContext(ctx context.Context, templateRef model.TemplateRef, objectsRoot filesystem.Fs, instanceID string, targetBranch model.BranchKey, inputsValues template.InputsValues, inputsDefsMap map[string]*template.Input, tickets *keboola.TicketProvider, components *model.ComponentsMap, projectState *state.State, projectBackends []string) *Context {
 	ctx = template.NewContext(ctx)
 	c := &Context{
 		_context:        ctx,
@@ -111,6 +112,7 @@ func NewContext(ctx context.Context, templateRef model.TemplateRef, objectsRoot 
 		objectIds:       make(metadata.ObjectIdsMap),
 		inputsUsage:     metadata.NewInputsUsage(),
 		inputsDefsMap:   inputsDefsMap,
+		projectBackends: projectBackends,
 	}
 
 	// Convert inputsValues to map
@@ -194,7 +196,7 @@ func (c *Context) InputsUsage() *metadata.InputsUsage {
 }
 
 // RegisterPlaceholder for an object oldId, it can be resolved later/async.
-func (c *Context) RegisterPlaceholder(oldID interface{}, fn PlaceholderResolver) Placeholder {
+func (c *Context) RegisterPlaceholder(oldID any, fn PlaceholderResolver) Placeholder {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 	if _, found := c.placeholders[oldID]; !found {
@@ -216,7 +218,7 @@ func (c *Context) RegisterPlaceholder(oldID interface{}, fn PlaceholderResolver)
 		c.placeholders[oldID] = p
 
 		// Resolve newId async by provider function
-		fn(p, func(newId interface{}) {
+		fn(p, func(newId any) {
 			c.replacements.AddID(p.asValue, newId)
 			c.objectIds[newId] = oldID
 		})
@@ -233,14 +235,16 @@ func (c *Context) registerJsonnetFunctions() {
 	c.jsonnetCtx.NativeFunctionWithAlias(function.InstanceIDShort(c.instanceIDShort))
 	c.jsonnetCtx.NativeFunctionWithAlias(function.ComponentIsAvailable(c.components))
 	c.jsonnetCtx.NativeFunctionWithAlias(function.SnowflakeWriterComponentID(c.components))
+	c.jsonnetCtx.NativeFunctionWithAlias(function.HasProjectBackend(c.projectBackends))
+	c.jsonnetCtx.NativeFunctionWithAlias(function.RandomID())
 }
 
 // mapID maps ConfigId/ConfigRowId in Jsonnet files to a <<~~ticket:123~~>> placeholder.
 // When all Jsonnet files are processed, new IDs are generated in parallel.
-func (c *Context) mapID(oldID interface{}) string {
+func (c *Context) mapID(oldID any) string {
 	p := c.RegisterPlaceholder(oldID, func(p Placeholder, cb ResolveCallback) {
 		// Placeholder -> new ID
-		var newID interface{}
+		var newID any
 		c.tickets.Request(func(ticket *keboola.Ticket) {
 			switch p.asValue.(type) {
 			case keboola.ConfigID:
@@ -267,7 +271,7 @@ func (c *Context) registerInputsUsageNotifier() {
 	})
 }
 
-func (n *inputUsageNotifier) OnGeneratedValue(fnName string, args []interface{}, partial bool, partialValue, _ interface{}, steps []interface{}) {
+func (n *inputUsageNotifier) OnGeneratedValue(fnName string, args []any, partial bool, partialValue, _ any, steps []any) {
 	// Only for Input function
 	if fnName != "Input" {
 		return

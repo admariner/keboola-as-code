@@ -4,6 +4,7 @@
     "id": %%TEST_KBC_PROJECT_ID%%,
     "apiHost": "%%TEST_KBC_STORAGE_API_HOST%%"
   },
+  "allowTargetEnv": false,
   "sortBy": "id",
   "naming": {
     "branch": "{branch_name}",
@@ -26,6 +27,12 @@
         "type": "git",
         "name": "keboola",
         "url": "https://github.com/keboola/keboola-as-code-templates.git",
+        "ref": "main"
+      },
+      {
+        "type": "git",
+        "name": "keboola-components",
+        "url": "https://github.com/keboola/keboola-as-code-templates-components.git",
         "ref": "main"
       }
     ]

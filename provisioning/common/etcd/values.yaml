@@ -9,14 +9,10 @@ podLabels:
   app: "{{ tpl (.Release.Name) . }}"
 nodeSelector:
   nodepool: main
-tolerations:
-  - key: app
-    operator: Exists
-    effect: NoSchedule
 
 # Locked/updated etcd image
 image:
-  tag: 3.5.5-debian-11-r16
+  tag: 3.5.14-debian-12-r1
 
 # Additional pod annotations
 podAnnotations:
@@ -60,6 +56,12 @@ extraEnvVars:
   # Default value in etcd v3.2+ is "100 000": https://etcd.io/docs/v3.5/op-guide/maintenance/#raft-log-retention
   - name: ETCD_SNAPSHOT_COUNT
     value: "10000"
+  # GOMEMLIMIT to prevent OOM kill, update the value together with "resources" spec.
+  - name: GOMEMLIMIT
+    value: "256MiB"
+  # Increase limit of operations in transaction.
+  - name: ETCD_MAX_TXN_OPS
+    value: "1000"
 
 # The root password is used for authentication, the client gets a JWT token with short expiration.
 auth:
@@ -109,7 +111,7 @@ startupProbe:
   periodSeconds: 5
   timeoutSeconds: 5
   successThreshold: 1
-  failureThreshold: 60
+  failureThreshold: 300
 livenessProbe:
   initialDelaySeconds: 0 # replaced by startupProbe
 readinessProbe:
@@ -173,7 +175,7 @@ extraDeploy:
                 app.kubernetes.io/component: defragmentation
             spec:
               {{- if .Values.nodeSelector }}
-              nodeSelector: {{-  toYaml .Values.nodeSelector | nindent 12  }}
+              nodeSelector: {{- toYaml .Values.nodeSelector | nindent 12 }}
               {{- end }}
               {{- if .Values.tolerations }}
               tolerations: {{- toYaml .Values.tolerations | nindent 12 }}

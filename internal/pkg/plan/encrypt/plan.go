@@ -3,6 +3,7 @@ package encrypt
 import (
 	"context"
 	"fmt"
+	"io"
 
 	"github.com/keboola/go-client/pkg/keboola"
 
@@ -26,20 +27,21 @@ func (p *Plan) Name() string {
 	return "encrypt"
 }
 
-func (p *Plan) Invoke(ctx context.Context, projectID keboola.ProjectID, logger log.Logger, keboolaProjectAPI *keboola.API, state *state.State) error {
+func (p *Plan) Invoke(ctx context.Context, projectID keboola.ProjectID, logger log.Logger, keboolaProjectAPI *keboola.AuthorizedAPI, state *state.State) error {
 	return newExecutor(ctx, projectID, logger, keboolaProjectAPI, state, p).invoke()
 }
 
-func (p *Plan) Log(logger log.Logger) {
-	writer := logger.InfoWriter()
-	writer.WriteString(fmt.Sprintf(`Plan for "%s" operation:`, p.Name()))
+func (p *Plan) Log(w io.Writer) {
+	fmt.Fprintf(w, `Plan for "%s" operation:`, p.Name())
+	fmt.Fprintln(w)
 	if len(p.actions) == 0 {
-		writer.WriteStringIndent(1, "no values to encrypt")
+		fmt.Fprintln(w, "  no values to encrypt")
 	} else {
 		for _, action := range p.actions {
-			writer.WriteStringIndent(1, action.Kind().Abbr+" "+action.Path())
+			fmt.Fprintln(w, "  "+action.Kind().Abbr+" "+action.Path())
 			for _, value := range action.values {
-				writer.WriteStringIndent(2, fmt.Sprintf("%v", value.path))
+				fmt.Fprintf(w, "    %v", value.path)
+				fmt.Fprintln(w)
 			}
 		}
 	}

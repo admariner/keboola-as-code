@@ -1,10 +1,12 @@
 package helper_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/keboola/go-client/pkg/keboola"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/fixtures"
 	. "github.com/keboola/keboola-as-code/internal/pkg/mapper/sharedcode/helper"
@@ -14,7 +16,7 @@ import (
 
 func TestGetSharedCodeByPath(t *testing.T) {
 	t.Parallel()
-	d := dependencies.NewMocked(t)
+	d := dependencies.NewMocked(t, context.Background())
 	mockedState := d.MockedState()
 
 	sharedCodeKey, _ := fixtures.CreateSharedCode(t, mockedState)
@@ -22,27 +24,27 @@ func TestGetSharedCodeByPath(t *testing.T) {
 
 	// Found
 	result, err := helper.GetSharedCodeByPath(`branch`, `_shared/keboola.python-transformation-v2`)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Equal(t, sharedCodeKey, result.Key())
 
 	// Different branch
 	result, err = helper.GetSharedCodeByPath(`branch123`, `_shared/keboola.python-transformation-v2`)
 	assert.Nil(t, result)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Equal(t, `missing shared code "branch123/_shared/keboola.python-transformation-v2"`, err.Error())
 
 	// Not found
 	result, err = helper.GetSharedCodeByPath(`branch`, `foo/bar`)
 	assert.Nil(t, result)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Equal(t, `missing shared code "branch/foo/bar"`, err.Error())
 }
 
 func TestGetSharedCodeRowByPath(t *testing.T) {
 	t.Parallel()
 
-	d := dependencies.NewMocked(t)
+	d := dependencies.NewMocked(t, context.Background())
 	mockedState := d.MockedState()
 
 	sharedCodeKey, _ := fixtures.CreateSharedCode(t, mockedState)
@@ -51,7 +53,7 @@ func TestGetSharedCodeRowByPath(t *testing.T) {
 
 	// Found
 	result, err := helper.GetSharedCodeRowByPath(sharedCode, `codes/code1`)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Equal(t, model.ConfigRowKey{
 		BranchID:    123,
@@ -63,14 +65,14 @@ func TestGetSharedCodeRowByPath(t *testing.T) {
 	// Not found
 	result, err = helper.GetSharedCodeRowByPath(sharedCode, `foo/bar`)
 	assert.Nil(t, result)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Equal(t, `missing shared code "branch/_shared/keboola.python-transformation-v2/foo/bar"`, err.Error())
 }
 
 func TestGetSharedCodeVariablesId(t *testing.T) {
 	t.Parallel()
 
-	d := dependencies.NewMocked(t)
+	d := dependencies.NewMocked(t, context.Background())
 	mockedState := d.MockedState()
 
 	fixtures.CreateSharedCode(t, mockedState)

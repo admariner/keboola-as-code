@@ -1,7 +1,6 @@
-FROM golang:1.19.2
+FROM golang:1.23.4
 
 ENV HOME=/my-home
-ENV GOMEMLIMIT=512MiB
 ENV GOCACHE=/tmp/cache/go
 ENV GOMODCACHE=/tmp/cache/go-mod
 ENV GOBIN=$GOPATH/bin
@@ -9,15 +8,24 @@ ENV GOFLAGS="-mod=mod"
 ENV GOLANGCI_LINT_CACHE=/tmp/cache/golangci-lint
 ENV PATH="$PATH:$GOBIN"
 
-# Install editor
-RUN apt-get update && apt-get install -y nano
+# Install packages
+RUN apt-get update && apt-get install --no-install-recommends --yes unzip nano libprotobuf-dev graphviz build-essential
 ENV EDITOR=nano
+
+# Install Protobuf
+RUN curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v29.2/protoc-29.2-linux-x86_64.zip && \
+    unzip protoc-29.2-linux-x86_64.zip -d /usr/local && \
+    rm -f protoc-29.2-linux-x86_64.zip
+
+# Download toxiproxy
+RUN curl -L https://github.com/Shopify/toxiproxy/releases/download/v2.11.0/toxiproxy-server-linux-amd64 -o /usr/local/bin/toxiproxy-server
+RUN chmod +x /usr/local/bin/toxiproxy-server
 
 # Install tools
 RUN mkdir -p /tmp/build
 COPY Makefile /tmp/build/Makefile
 COPY scripts  /tmp/build/scripts
-RUN cd /tmp/build && make tools && rm -rf /tmp/build
+RUN cd /tmp/build && make tools && cd / && rm -rf /tmp/build && go clean -cache -modcache
 
 # Install envsubstr and helm
 RUN curl -L https://github.com/a8m/envsubst/releases/download/v1.2.0/envsubst-$(uname -s)-$(uname -m) -o /usr/local/bin/envsubst && \
@@ -29,11 +37,11 @@ RUN mkdir -p ~ && \
     echo 'PS1="\w > "' > ~/.bashrc
 
 # Fix permissions
-RUN mkdir -p $GOPATH && chmod -R 777 $GOPATH && \
-    mkdir -p $GOCACHE && chmod -R 777 $GOCACHE && \
-    mkdir -p $GOMODCACHE && chmod -R 777 $GOMODCACHE && \
-    mkdir -p $GOLANGCI_LINT_CACHE && chmod -R 777 $GOLANGCI_LINT_CACHE && \
-    mkdir -p $HOME && chmod -R 777 $HOME
+RUN chmod -R 1777 $GOPATH && \
+    mkdir -p $GOCACHE && chmod -R 1777 $GOCACHE && \
+    mkdir -p $GOMODCACHE && chmod -R 1777 $GOMODCACHE && \
+    mkdir -p $GOLANGCI_LINT_CACHE && chmod -R 1777 $GOLANGCI_LINT_CACHE && \
+    mkdir -p $HOME && chmod -R 1777 $HOME
 
 WORKDIR /code/
 CMD ["/bin/bash"]

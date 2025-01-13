@@ -1,11 +1,12 @@
 package links_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/keboola/go-client/pkg/keboola"
 	"github.com/keboola/go-utils/pkg/orderedmap"
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/mapper/sharedcode/links"
 	"github.com/keboola/keboola-as-code/internal/pkg/model"
@@ -15,7 +16,7 @@ import (
 
 func createStateWithMapper(t *testing.T) (*state.State, dependencies.Mocked) {
 	t.Helper()
-	d := dependencies.NewMocked(t)
+	d := dependencies.NewMocked(t, context.Background())
 	mockedState := d.MockedState()
 	mockedState.Mapper().AddMapper(links.NewMapper(mockedState))
 	return mockedState, d
@@ -79,7 +80,7 @@ func createLocalTranWithSharedCode(t *testing.T, state *state.State) *model.Conf
 			},
 		},
 	}
-	assert.NoError(t, state.Set(transformation))
+	require.NoError(t, state.Set(transformation))
 	return transformation
 }
 
@@ -141,7 +142,7 @@ func createInternalTranWithSharedCode(t *testing.T, sharedCodeKey model.ConfigKe
 		},
 	}
 
-	assert.NoError(t, state.Set(transformation))
+	require.NoError(t, state.Set(transformation))
 	return transformation
 }
 
@@ -149,7 +150,7 @@ func createRemoteTranWithSharedCode(t *testing.T, sharedCodeKey model.ConfigKey,
 	t.Helper()
 
 	// Rows -> rows IDs
-	var rows []interface{}
+	rows := make([]any, 0, len(sharedCodeRowsKeys))
 	for _, row := range sharedCodeRowsKeys {
 		rows = append(rows, row.ID.String())
 	}
@@ -174,6 +175,6 @@ func createRemoteTranWithSharedCode(t *testing.T, sharedCodeKey model.ConfigKey,
 		},
 	}
 
-	assert.NoError(t, state.Set(transformation))
+	require.NoError(t, state.Set(transformation))
 	return transformation
 }

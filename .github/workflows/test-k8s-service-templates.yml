@@ -10,13 +10,15 @@ on:
       - .github/workflows/test-k8s-service-templates.yml
       - provisioning/templates-api/**
       - provisioning/common/**
+      # When the config structure is changed it may be necessary to adjust k8s configmap.
+      - internal/pkg/service/templates/api/config/**
 
 env:
   MINIKUBE_PROFILE: templates-api
   MINIKUBE_DRIVER: docker
 
   KUBERNETES_NAMESPACE: templates-api
-  KUBERNETES_ROLLOUT_WAIT: 120s
+  KUBERNETES_ROLLOUT_WAIT: 200s
   REMOVE_RESOURCES_LIMITS: true
 
   SERVICE_NAME: Templates API
@@ -31,11 +33,11 @@ defaults:
 
 jobs:
   test:
-    name: test
+    name: "K8S test: Templates Service"
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.ref }}
 
@@ -60,7 +62,7 @@ jobs:
         run: kubectl config set-context --current "--namespace=$KUBERNETES_NAMESPACE"
 
       - name: Checkout BASE branch (or HEAD if it is not a pull request)
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.base.ref }}
 
@@ -73,7 +75,7 @@ jobs:
         run: sleep 10 && /tmp/latest-scripts/k8s/dump.sh /tmp/artifacts/test-k8s-state.old.json
 
       - name: Checkout HEAD branch
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.ref }}
 
@@ -88,9 +90,9 @@ jobs:
           emptyReplicaSets=$(kubectl get replicasets --ignore-not-found | tail --lines=+2 | awk '{if ($2 + $3 + $4 == 0) print $1}')
           echo -e "Found empty replica sets:"
           echo "$emptyReplicaSets"
-          echo "-------------------------" 
+          echo "-------------------------"
           echo "$emptyReplicaSets" | xargs --no-run-if-empty -I {} kubectl delete replicaset "{}"
-          
+
           # Wait for pod startup/termination
           sleep 10
           # Dump objects
@@ -147,7 +149,7 @@ jobs:
             --labels="${ETCD_RELEASE_NAME}-client=true" \
             --env="ETCD_ROOT_PASSWORD=$ETCD_ROOT_PASSWORD" \
             --env="ETCDCTL_ENDPOINTS=$ETCD_ENDPOINT" \
-            --command -- etcdctl --user root:$ETCD_ROOT_PASSWORD put /message Hello
+            --command -- etcdctl --dial-timeout=10s --user root:$ETCD_ROOT_PASSWORD put /message Hello
 
       - name: Check access to the etcd from the DataDog Agent
         if: always()
@@ -184,10 +186,8 @@ jobs:
         if: always()
         run: |
           set -Eeuo pipefail
-          
           # Create a job from the cron job
           kubectl create job "--from=cronjob/${ETCD_RELEASE_NAME}-defrag" test-defrag-job
-          
           # Wait for the job
           if kubectl wait --for=condition=complete --timeout=30s job/test-defrag-job; then
             echo "The job succeed, logs:"
@@ -203,16 +203,13 @@ jobs:
         if: always()
         run: |
           set -Eeuo pipefail
-          
           # Diff JSON states
           /tmp/latest-scripts/k8s/diff.sh \
             /tmp/artifacts/test-k8s-state.old.json \
             /tmp/artifacts/test-k8s-state.new.json \
             /tmp/artifacts/test-k8s-state.diff
-          
           # Remove ANSI sequences
           sed -e 's/\x1b\[[0-9;]*m//g' -i /tmp/artifacts/test-k8s-state.diff || true
-          
           # Prepare PR comment message
           echo -e "### ${{ env.SERVICE_NAME }} Kubernetes Diff [CI]\n\n" >> /tmp/artifacts/test-k8s-state.diff.message
           echo -e "Between \`base\` ${{ github.event.pull_request.base.sha }} :arrow_left:  \`head\` ${{ github.event.pull_request.head.sha }}.\n\n" >> /tmp/artifacts/test-k8s-state.diff.message
@@ -223,15 +220,16 @@ jobs:
       - name: Dump logs
         if: always()
         run: |
-          /tmp/latest-scripts/minikube/logs.sh /tmp/artifacts && 
+          /tmp/latest-scripts/minikube/logs.sh /tmp/artifacts &&
           /tmp/latest-scripts/k8s/logs.sh /tmp/artifacts
 
       - name: Upload artifacts
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: test-k8s-state
+          name: test-k8s-state-templates
           path: /tmp/artifacts
+          if-no-files-found: error
 
       - name: Send PR comment
         uses: marocchino/sticky-pull-request-comment@v2

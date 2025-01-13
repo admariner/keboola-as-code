@@ -15,7 +15,7 @@ import (
 )
 
 type dependencies interface {
-	KeboolaProjectAPI() *keboola.API
+	KeboolaProjectAPI() *keboola.AuthorizedAPI
 	ProjectFeatures() keboola.FeaturesMap
 	Logger() log.Logger
 	Telemetry() telemetry.Telemetry
@@ -48,9 +48,9 @@ func Run(ctx context.Context, o RunOptions, d dependencies) (err error) {
 	}
 
 	if len(o.Jobs) > 1 {
-		queue.logger.Infof("Starting %d jobs.", len(o.Jobs))
+		queue.logger.Infof(ctx, "Starting %d jobs.", len(o.Jobs))
 	} else {
-		queue.logger.Info("Starting job.")
+		queue.logger.Info(ctx, "Starting job.")
 	}
 
 	// dispatch jobs in parallel
@@ -63,13 +63,13 @@ func Run(ctx context.Context, o RunOptions, d dependencies) (err error) {
 	queue.stopLogRemaining()
 
 	if err != nil {
-		queue.logger.Error("Some jobs failed, see below.")
+		queue.logger.Error(ctx, "Some jobs failed, see below.")
 		return err
 	} else {
 		if !o.Async {
-			queue.logger.Info("Finished all jobs.")
+			queue.logger.Info(ctx, "Finished all jobs.")
 		} else {
-			queue.logger.Info("Started all jobs.")
+			queue.logger.Info(ctx, "Started all jobs.")
 		}
 		return nil
 	}
@@ -80,7 +80,7 @@ type JobQueue struct {
 	hasQueueV2 bool
 
 	ctx    context.Context
-	api    *keboola.API
+	api    *keboola.AuthorizedAPI
 	logger log.Logger
 
 	wg  *sync.WaitGroup
@@ -101,7 +101,7 @@ func (q *JobQueue) startLogRemaining() {
 			case <-q.done:
 				break
 			case <-time.After(time.Second * 5):
-				q.logger.Infof(`Waiting for "%s"`, strings.Join(q.getRemainingJobs(), `", "`))
+				q.logger.Infof(q.ctx, `Waiting for "%s"`, strings.Join(q.getRemainingJobs(), `", "`))
 			}
 		}
 	}()
@@ -124,7 +124,7 @@ func (q *JobQueue) getRemainingJobs() []string {
 }
 
 func (q *JobQueue) started(job *Job) {
-	q.logger.Infof("Started job \"%s\" using config \"%s\"", job.id, job.Key())
+	q.logger.Infof(q.ctx, "Started job \"%s\" using config \"%s\"", job.id, job.Key())
 
 	q.remainingMutex.Lock()
 	q.remaining[string(job.id)] = true
@@ -136,7 +136,7 @@ func (q *JobQueue) finished(job *Job) {
 	q.remaining[string(job.id)] = false
 	q.remainingMutex.Unlock()
 
-	q.logger.Infof("Finished job \"%s\"", job.id)
+	q.logger.Infof(q.ctx, "Finished job \"%s\"", job.id)
 }
 
 func (q *JobQueue) dispatch(job *Job) {
@@ -196,7 +196,7 @@ func (o *Job) Key() string {
 	return out
 }
 
-func (o *Job) Start(ctx context.Context, api *keboola.API, async bool, hasQueueV2 bool) error {
+func (o *Job) Start(ctx context.Context, api *keboola.AuthorizedAPI, async bool, hasQueueV2 bool) error {
 	if hasQueueV2 {
 		job, err := api.NewCreateJobRequest(o.ComponentID).
 			WithConfig(o.ConfigID).

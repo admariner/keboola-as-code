@@ -10,10 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
+	tp "github.com/keboola/go-utils/pkg/testproject"
+	"github.com/stretchr/testify/require"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem"
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem/aferofs"
+	"github.com/keboola/keboola-as-code/internal/pkg/fixtures"
 	"github.com/keboola/keboola-as-code/internal/pkg/utils/testhelper"
 	"github.com/keboola/keboola-as-code/internal/pkg/utils/testhelper/storageenv"
 	"github.com/keboola/keboola-as-code/internal/pkg/utils/testproject"
@@ -22,48 +24,77 @@ import (
 const testTimeout = 5 * time.Minute
 
 type Runner struct {
-	t          *testing.T
-	tempDir    string
-	testsDir   string
-	workingDir string
+	t        *testing.T
+	testsDir string
 }
 
 func NewRunner(t *testing.T) *Runner {
 	t.Helper()
 
 	_, callerFile, _, _ := runtime.Caller(1) //nolint:dogsled
-	callerDir := filepath.Dir(callerFile)    // nolint:forbidigo
+	testsDir := filepath.Dir(callerFile)     // nolint:forbidigo
 
-	workingDir := filesystem.Join(callerDir, ".out")
-	assert.NoError(t, os.RemoveAll(workingDir))
-	assert.NoError(t, os.MkdirAll(workingDir, 0o755))
+	// Delete debug files from the previous run
+	if testhelper.CreateOutDir() {
+		require.NoError(t, os.RemoveAll(filesystem.Join(testsDir, ".out")))
+	}
 
-	return &Runner{t: t, testsDir: callerDir, workingDir: workingDir, tempDir: t.TempDir()}
+	return &Runner{t: t, testsDir: testsDir}
 }
 
 func (r *Runner) newTest(t *testing.T, testDirName string) (*Test, context.CancelFunc) {
 	t.Helper()
 
 	testDir := filepath.Join(r.testsDir, testDirName)
-	workingDir := filepath.Join(r.workingDir, testDirName)
 
-	assert.NoError(t, os.RemoveAll(workingDir))
-	assert.NoError(t, os.MkdirAll(workingDir, 0o755))
-	assert.NoError(t, os.Chdir(workingDir))
+	// Create temporary working dir
+	workingDir := t.TempDir()
+	require.NoError(t, os.Chdir(workingDir))
+
+	// Chdir after the test, without it, the deletion of the temp dir is not possible on Windows
+	t.Cleanup(func() {
+		require.NoError(t, os.Chdir(testDir))
+	})
+
+	// Keep working dir for debugging
+	t.Cleanup(func() {
+		if testhelper.CreateOutDir() {
+			outDir := filesystem.Join(r.testsDir, ".out", testDirName)
+			require.NoError(t, os.RemoveAll(outDir))
+			require.NoError(t, os.MkdirAll(outDir, 0o755))
+			require.NoError(t, aferofs.CopyFs2Fs(nil, workingDir, nil, outDir))
+		}
+	})
 
 	testDirFS, err := aferofs.NewLocalFs(testDir)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	workingDirFS, err := aferofs.NewLocalFs(workingDir)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
-	project := testproject.GetTestProjectForTest(t)
+	state := &fixtures.StateFile{}
 
+	if testDirFS.IsFile(context.Background(), initialStateFileName) {
+		state, err = fixtures.LoadStateFile(testDir + "/" + initialStateFileName)
+		require.NoError(t, err)
+	}
+
+	var backendOptions []tp.Option
+
+	if state.Backend != nil {
+		backendOptions = append(backendOptions, GetBackendOption(t, state.Backend))
+	}
+
+	if state.LegacyTransformation {
+		backendOptions = append(backendOptions, tp.WithLegacyTransformation())
+	}
+
+	project := testproject.GetTestProjectForTest(t, "", backendOptions...)
 	// Create context with timeout.
 	// Acquiring a test project and setting it up is not part of the timeout.
 	ctx, cancelFn := context.WithTimeout(context.Background(), testTimeout)
 
 	// Create ENV provider
-	envProvider := storageenv.CreateStorageEnvTicketProvider(ctx, project.KeboolaProjectAPI(), project.Env())
+	envProvider := storageenv.CreateStorageEnvTicketProvider(ctx, project.ProjectAPI(), project.Env())
 
 	envMap := project.Env()
 	// Disable version check
@@ -98,4 +129,18 @@ func (r *Runner) ForEachTest(runFn func(test *Test)) {
 			runFn(test)
 		})
 	}
+}
+
+func GetBackendOption(t *testing.T, backendDefinition *fixtures.BackendDefinition) tp.Option {
+	t.Helper()
+	if backendDefinition.Type == tp.BackendSnowflake {
+		return tp.WithSnowflakeBackend()
+	}
+
+	if backendDefinition.Type == tp.BackendBigQuery {
+		return tp.WithBigQueryBackend()
+	}
+
+	require.Failf(t, "unexcepted type", `unexcepted type: "%s"`, backendDefinition.Type)
+	return nil
 }

@@ -1,9 +1,11 @@
 package input
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRules_Empty(t *testing.T) {
@@ -16,17 +18,17 @@ func TestRules_ValidateValue(t *testing.T) {
 	t.Parallel()
 
 	// Valid
-	assert.NoError(t, Rules("").ValidateValue(Input{ID: "my-field", Name: "my field"}, "foo bar"))
-	assert.NoError(t, Rules("required").ValidateValue(Input{ID: "my-field", Name: "my field"}, "foo bar"))
+	require.NoError(t, Rules("").ValidateValue(context.Background(), Input{ID: "my-field", Name: "my field"}, "foo bar"))
+	require.NoError(t, Rules("required").ValidateValue(context.Background(), Input{ID: "my-field", Name: "my field"}, "foo bar"))
 
 	// Invalid
-	err := Rules("required").ValidateValue(Input{ID: "my-field", Name: "my field"}, "")
-	assert.Error(t, err)
+	err := Rules("required").ValidateValue(context.Background(), Input{ID: "my-field", Name: "my field"}, "")
+	require.Error(t, err)
 	assert.Equal(t, "my field is a required field", err.Error())
 
 	// Invalid rule
-	err = Rules("foo").ValidateValue(Input{ID: "my-field", Name: "my field"}, "")
-	assert.Error(t, err)
+	err = Rules("foo").ValidateValue(context.Background(), Input{ID: "my-field", Name: "my field"}, "")
+	require.Error(t, err)
 	assert.Equal(t, InvalidRulesError("undefined validation function 'foo'"), err)
 }
 
@@ -34,15 +36,15 @@ func TestRules_ValidateEmptyObject(t *testing.T) {
 	t.Parallel()
 
 	// Valid
-	assert.NoError(t, Rules("required").ValidateValue(Input{ID: "my-field", Name: "my field", Type: TypeObject}, map[string]any{"foo": "bar"}))
+	require.NoError(t, Rules("required").ValidateValue(context.Background(), Input{ID: "my-field", Name: "my field", Type: TypeObject}, map[string]any{"foo": "bar"}))
 
 	// Invalid
-	err := Rules("required").ValidateValue(Input{ID: "my-field", Name: "my field", Type: TypeObject}, map[string]any{})
-	assert.Error(t, err)
+	err := Rules("required").ValidateValue(context.Background(), Input{ID: "my-field", Name: "my field", Type: TypeObject}, map[string]any{})
+	require.Error(t, err)
 	assert.Equal(t, "my field is a required field", err.Error())
 
 	// Invalid - multiple rules
-	err = Rules("unique,required,min=1").ValidateValue(Input{ID: "my-field", Name: "my field", Type: TypeObject}, map[string]any{})
-	assert.Error(t, err)
+	err = Rules("unique,required,min=1").ValidateValue(context.Background(), Input{ID: "my-field", Name: "my field", Type: TypeObject}, map[string]any{})
+	require.Error(t, err)
 	assert.Equal(t, "my field is a required field", err.Error())
 }

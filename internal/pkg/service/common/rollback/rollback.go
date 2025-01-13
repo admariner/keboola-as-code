@@ -8,6 +8,7 @@ package rollback
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/log"
 	"github.com/keboola/keboola-as-code/internal/pkg/utils/errors"
@@ -67,8 +68,10 @@ func (v *Container) InvokeIfErr(ctx context.Context, errPtr *error) {
 }
 
 func (v *Container) Invoke(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
 	if err := v.container.invokeOrErr(ctx); err != nil {
-		v.logger.Warn(errors.PrefixError(err, "rollback failed"))
+		v.logger.Warn(ctx, errors.PrefixError(err, "rollback failed").Error())
 	}
 }
 
@@ -122,7 +125,6 @@ func (v *container) invokeParallel(ctx context.Context) error {
 	// Invoke in parallel
 	wg := &sync.WaitGroup{}
 	for _, cb := range v.callbacks {
-		cb := cb
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

@@ -21,7 +21,7 @@ type Prompt struct {
 	editor string // the editor is started when Editor() is called, if empty, the default is system editor is used
 }
 
-// nolint: gochecknoinits
+//nolint:gochecknoinits
 func init() {
 	// Workaround for bug in 3rd party lib
 	// https://github.com/AlecAivazis/survey/issues/336
@@ -44,7 +44,7 @@ func (p *Prompt) IsInteractive() bool {
 	return true
 }
 
-func (p *Prompt) Printf(format string, a ...interface{}) {
+func (p *Prompt) Printf(format string, a ...any) {
 	// The error can occur mainly in tests, if stdout of the virtual terminal is closed on test failure.
 	_, _ = fmt.Fprintf(p.stdout, format, a...)
 }
@@ -84,7 +84,7 @@ func (p *Prompt) Ask(q *prompt.Question) (result string, ok bool) {
 	if q.Validator != nil {
 		if q.Hidden && q.Default != "" {
 			original := q.Validator
-			q.Validator = func(val interface{}) error {
+			q.Validator = func(val any) error {
 				if val == "" {
 					val = q.Default
 				}

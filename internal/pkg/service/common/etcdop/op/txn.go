@@ -3,309 +3,468 @@ package op
 import (
 	"context"
 
-	"go.etcd.io/etcd/api/v3/etcdserverpb"
 	etcd "go.etcd.io/etcd/client/v3"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/utils/errors"
 )
 
-// TxnOp provides high-level interface above etcd.Txn.
-// Values are mapped by the op.mapper operations
-// and processed by the op.processors, see ForType[R] type.
-type TxnOp struct {
-	cmps       []etcd.Cmp
-	thenOps    []Op
-	elseOps    []Op
-	initErrs   errors.MultiError
-	processors []txnProcessor
+const (
+	txnOpIf      = txnPartType("if")
+	txnOpThen    = txnPartType("then")
+	txnOpThenTxn = txnPartType("thenTxn") // thenTxnOps are separated from thenOps to avoid confusing between Then and Merge
+	txnOpElse    = txnPartType("else")
+	txnOpMerge   = txnPartType("merge")
+)
+
+// TxnOp provides a high-level interface built on top of etcd.Txn., see If, Then and Else methods.
+//
+// For more information on etcd transactions, please refer to:
+// https://etcd.io/docs/v3.5/learning/api/#transaction
+//
+// Like other operations in this package, you can define processors using the AddProcessor method.
+//
+// High-level TxnOp is composed of high-level Op operations.
+// This allows you to easily combine operations into an atomic transaction
+// Processors defined in the operations will be executed.
+//
+// Another advantage is the ability to combine several TxnOp transactions into one, see Merge method.
+//
+// R is type of the transaction result, use NoResult type if you don't need it.
+// The results of individual sub-operations can be obtained using TxnResult.SubResults,
+// but a better way is to set the OnResult callback on the sub-transaction.
+type TxnOp[R any] struct {
+	result *R
+	client etcd.KV
+	errs   errors.MultiError
+	parts  []txnPart
+	// processors are callbacks that can react on or modify the result of an operation.
+	// processors are invoked only if the etcd operation completed without server error.
+	// Result methods Err/AddErr/ResetErr are used for logical errors, e.g. some unexpected value is found.
+	processors []func(ctx context.Context, r *TxnResult[R])
 }
 
-type txnProcessor func(ctx context.Context, rawResponse *etcd.TxnResponse, result TxnResult, err error) error
-
-type TxnOpDef struct {
-	ops        []Op
-	processors []txnProcessor
+// txnInterface is a marker interface for generic type TxnOp.
+type txnInterface interface {
+	Op
+	txnParts() []txnPart
+	txnInitError() error
+	txnInvokeProcessors(ctx context.Context, result *resultBase)
 }
 
-// TxnResult with mapped partial results.
-// Response type differs according to the used operation.
-type TxnResult struct {
-	Succeeded bool
-	Header    *Header
-	Results   []any
+type txnPartType string
+
+type txnPart struct {
+	Type txnPartType
+	If   etcd.Cmp
+	Op   Op
 }
 
-// inlineOp is helper for NewTxnOp, it implements Op interface.
-type inlineOp struct {
-	op          etcd.Op
-	err         error
-	mapResponse mapResponseFn
+type lowLevelTxn[R any] struct {
+	result     *R
+	client     etcd.KV
+	processors []func(ctx context.Context, r *TxnResult[R])
+	ifs        []etcd.Cmp
+	thenOps    []etcd.Op
+	elseOps    []etcd.Op
 }
 
-type mapResponseFn func(ctx context.Context, response Response) (result any, err error)
-
-func newInlineOp(op etcd.Op, err error, fn mapResponseFn) Op {
-	return &inlineOp{op: op, err: err, mapResponse: fn}
+// Txn creates an empty transaction with NoResult.
+func Txn(client etcd.KV) *TxnOp[NoResult] {
+	return &TxnOp[NoResult]{client: client, result: &NoResult{}, errs: errors.NewMultiError()}
 }
 
-func (v *inlineOp) Op(_ context.Context) (etcd.Op, error) {
-	return v.op, v.err
+// TxnWithResult creates an empty transaction with the result.
+func TxnWithResult[R any](client etcd.KV, result *R) *TxnOp[R] {
+	return &TxnOp[R]{client: client, result: result, errs: errors.NewMultiError()}
 }
 
-func (v *inlineOp) MapResponse(ctx context.Context, response Response) (result any, err error) {
-	return v.mapResponse(ctx, response)
+// MergeToTxn merges listed operations into a transaction using And method.
+func MergeToTxn(client etcd.KV, ops ...Op) *TxnOp[NoResult] {
+	return Txn(client).Merge(ops...)
 }
 
-func (v *inlineOp) DoWithHeader(ctx context.Context, client etcd.KV, opts ...Option) (*Header, error) {
-	op, err := v.Op(ctx)
-	if err != nil {
-		return nil, err
+func (v *TxnOp[R]) txnParts() []txnPart {
+	return v.parts
+}
+
+func (v *TxnOp[R]) txnInitError() error {
+	return v.errs.ErrorOrNil()
+}
+
+func (v *TxnOp[R]) txnInvokeProcessors(ctx context.Context, base *resultBase) {
+	txnResult := newTxnResult(base, v.result)
+	for _, p := range v.processors {
+		p(ctx, txnResult)
 	}
-	response, err := DoWithRetry(ctx, client, op, opts...)
-	return getResponseHeader(response), err
 }
 
-func (v *inlineOp) DoOrErr(ctx context.Context, client etcd.KV, opts ...Option) error {
-	_, err := v.DoWithHeader(ctx, client, opts...)
-	return err
+func (v *TxnOp[R]) Empty() bool {
+	return len(v.parts) == 0
 }
 
-func NewTxnOp() *TxnOp {
-	return &TxnOp{initErrs: errors.NewMultiError()}
-}
+// If takes a list of comparison.
+// If all comparisons succeed, the Then branch will be executed; otherwise, the Else branch will be executed.
+func (v *TxnOp[R]) If(cs ...etcd.Cmp) *TxnOp[R] {
+	for _, c := range cs {
+		v.parts = append(v.parts, txnPart{Type: txnOpIf, If: c})
+	}
 
-func MergeToTxn(ops ...Op) *TxnOpDef {
-	return &TxnOpDef{ops: ops}
-}
-
-func (v *TxnOpDef) Add(ops ...Op) *TxnOpDef {
-	v.ops = append(v.ops, ops...)
 	return v
 }
 
-func (v *TxnOpDef) WithProcessor(p txnProcessor) *TxnOpDef {
+// Then takes a list of operations.
+// The Then operations will be executed if all If comparisons succeed.
+// To add a transaction to the Then branch, use ThenTxn, or use Merge to merge transactions.
+func (v *TxnOp[R]) Then(ops ...Op) *TxnOp[R] {
+	for i, op := range ops {
+		// Check common high-level transaction types.
+		// Bulletproof check of the low-level transaction is in the "lowLevelTxn" method.
+		if _, ok := op.(txnInterface); ok {
+			panic(errors.Errorf(`invalid operation[%d]: op is a transaction, use Merge or ThenTxn, not Then`, i))
+		}
+		v.parts = append(v.parts, txnPart{Type: txnOpThen, Op: op})
+	}
+
+	return v
+}
+
+// ThenTxn adds the transaction to the Then branch.
+// To merge a transaction, use Merge.
+func (v *TxnOp[R]) ThenTxn(ops ...Op) *TxnOp[R] {
+	for _, op := range ops {
+		v.parts = append(v.parts, txnPart{Type: txnOpThenTxn, Op: op})
+	}
+	return v
+}
+
+// Else takes a list of operations.
+// The operations in the Else branch will be executed if any of the If comparisons fail.
+func (v *TxnOp[R]) Else(ops ...Op) *TxnOp[R] {
+	for _, op := range ops {
+		v.parts = append(v.parts, txnPart{Type: txnOpElse, Op: op})
+	}
+	return v
+}
+
+// Merge merges the transaction with one or more other transactions.
+// If comparisons from all transactions are merged.
+// The processors from all transactions are preserved and executed.
+//
+// For non-transaction operations, the method behaves the same as Then.
+// To add a transaction to the Then branch without merging, use ThenTxn.
+func (v *TxnOp[R]) Merge(ops ...Op) *TxnOp[R] {
+	for _, op := range ops {
+		v.parts = append(v.parts, txnPart{Type: txnOpMerge, Op: op})
+	}
+	return v
+}
+
+// AddError - all static errors are returned when the low level txn is composed.
+// It makes error handling easier and move it to one place.
+func (v *TxnOp[R]) AddError(errs ...error) *TxnOp[R] {
+	v.errs.Append(errs...)
+	return v
+}
+
+// AddProcessor adds a processor callback which is always executed after the transaction.
+func (v *TxnOp[R]) AddProcessor(p func(ctx context.Context, r *TxnResult[R])) *TxnOp[R] {
 	v.processors = append(v.processors, p)
 	return v
 }
 
-// WithOnResult is a shortcut for the WithProcessor.
-func (v *TxnOpDef) WithOnResult(fn func(result TxnResult)) *TxnOpDef {
-	return v.WithProcessor(func(_ context.Context, _ *etcd.TxnResponse, result TxnResult, err error) error {
-		if err == nil {
-			fn(result)
+// OnResult is a shortcut for the AddProcessor.
+// If no error occurred yet, then the callback is executed with the result.
+func (v *TxnOp[R]) OnResult(fn func(result *TxnResult[R])) *TxnOp[R] {
+	return v.AddProcessor(func(_ context.Context, r *TxnResult[R]) {
+		if r.Err() == nil {
+			fn(r)
 		}
-		return err
 	})
 }
 
-// WithOnResultOrErr is a shortcut for the WithProcessor.
-func (v *TxnOpDef) WithOnResultOrErr(fn func(result TxnResult) error) *TxnOpDef {
-	return v.WithProcessor(func(_ context.Context, _ *etcd.TxnResponse, result TxnResult, err error) error {
-		if err == nil {
-			err = fn(result)
+// SetResultTo is a shortcut for the AddProcessor.
+// If no error occurred, the result of the operation is written to the target pointer,
+// otherwise an empty value is written.
+func (v *TxnOp[R]) SetResultTo(ptr *R) *TxnOp[R] {
+	v.AddProcessor(func(ctx context.Context, r *TxnResult[R]) {
+		if r.Err() == nil {
+			*ptr = r.Result()
+		} else {
+			var empty R
+			*ptr = empty
 		}
-		return err
+	})
+	return v
+}
+
+// OnFailed is a shortcut for the AddProcessor.
+// If no error occurred yet and the transaction is failed, then the callback is executed.
+func (v *TxnOp[R]) OnFailed(fn func(result *TxnResult[R])) *TxnOp[R] {
+	return v.AddProcessor(func(_ context.Context, r *TxnResult[R]) {
+		if r.Err() == nil && !r.Succeeded() {
+			fn(r)
+		}
 	})
 }
 
-func (v *TxnOpDef) Txn(ctx context.Context) *TxnOp {
-	txn := NewTxnOp()
-	for _, item := range v.ops {
-		item := item
-
-		// Convert high-level operation to low-level operation.
-		// Error will be returned by the "Do" method.
-		// It simplifies txn nesting. All errors are checked in the one place.
-		op, err := item.Op(ctx)
-		if err != nil {
-			txn.initErrs.Append(err)
-			continue
+// OnSucceeded is a shortcut for the AddProcessor.
+// If no error occurred yet and the transaction is succeeded, then the callback is executed.
+func (v *TxnOp[R]) OnSucceeded(fn func(result *TxnResult[R])) *TxnOp[R] {
+	return v.AddProcessor(func(_ context.Context, r *TxnResult[R]) {
+		if r.Err() == nil && r.Succeeded() {
+			fn(r)
 		}
+	})
+}
 
-		// Add operation to the "Then" branch, if it is not a sub-txn.
-		if !op.IsTxn() {
-			txn.Then(item)
-			continue
-		}
+func (v *TxnOp[R]) Do(ctx context.Context, opts ...Option) *TxnResult[R] {
+	if lowLevel, err := v.lowLevelTxn(ctx); err == nil {
+		return lowLevel.Do(ctx, opts...)
+	} else {
+		return newErrorTxnResult[R](err)
+	}
+}
 
-		// Transaction merging. See "TestMergeToTxn_Processors" for an example.
-		subCmps, subThen, subElse := op.Txn()
-		// Move "If" conditions from the sub-txn to the parent txn.
-		// AND logic applies, so all merged "If" conditions must be met, to run all merged "Then" operations.
-		txn.If(subCmps...)
-		// Conditions are moved to the parent txn ^^^, so here are not needed.
-		txn.Then(newInlineOp(etcd.OpTxn([]etcd.Cmp{}, subThen, []etcd.Op{}), nil, item.MapResponse))
-		// MapResponse/Processors for the "Else" branch of the sub-txn
-		// should be called only if the sub-txn caused the parent txn fall.
-		txn.Else(newInlineOp(etcd.OpTxn(subCmps, []etcd.Op{}, subElse), nil, item.MapResponse))
+func (v *TxnOp[R]) Op(ctx context.Context) (LowLevelOp, error) {
+	if lowLevel, err := v.lowLevelTxn(ctx); err == nil {
+		return lowLevel.Op(ctx)
+	} else {
+		return LowLevelOp{}, err
+	}
+}
+
+func (v *TxnOp[R]) lowLevelTxn(ctx context.Context) (*lowLevelTxn[R], error) {
+	out := &lowLevelTxn[R]{result: v.result, client: v.client}
+
+	if err := out.addParts(ctx, v); err != nil {
+		return nil, err
 	}
 
-	txn.processors = v.processors[:]
+	// Add top-level processors
+	out.processors = append(out.processors, v.processors...)
 
-	return txn
+	return out, nil
 }
 
-func (v *TxnOpDef) Do(ctx context.Context, client etcd.KV, opts ...Option) (TxnResult, error) {
-	return v.Txn(ctx).Do(ctx, client, opts...)
+func (v *lowLevelTxn[R]) Op(_ context.Context) (LowLevelOp, error) {
+	return v.op(), nil
 }
 
-func (v *TxnOpDef) DoWithHeader(ctx context.Context, client etcd.KV, opts ...Option) (*Header, error) {
-	return v.Txn(ctx).DoWithHeader(ctx, client, opts...)
+func (v *lowLevelTxn[R]) op() LowLevelOp {
+	return LowLevelOp{
+		Op: etcd.OpTxn(v.ifs, v.thenOps, v.elseOps),
+		MapResponse: func(ctx context.Context, raw *RawResponse) (result any, err error) {
+			txnResult := v.mapResponse(ctx, raw)
+			return txnResult, txnResult.Err()
+		},
+	}
 }
 
-func (v *TxnOpDef) DoOrErr(ctx context.Context, client etcd.KV, opts ...Option) error {
-	return v.Txn(ctx).DoOrErr(ctx, client, opts...)
-}
+func (v *lowLevelTxn[R]) Do(ctx context.Context, opts ...Option) *TxnResult[R] {
+	// Create low-level operation
+	op := v.op()
 
-func (v *TxnOpDef) Op(ctx context.Context) (etcd.Op, error) {
-	return v.Txn(ctx).Op(ctx)
-}
-
-func (v *TxnOpDef) MapResponse(ctx context.Context, response Response) (result any, err error) {
-	return v.Txn(ctx).MapResponse(ctx, response)
-}
-
-// If takes a list of comparison. If all comparisons passed in succeed,
-// the operations passed into Then() will be executed. Or the operations
-// passed into Else() will be executed.
-func (v *TxnOp) If(cs ...etcd.Cmp) *TxnOp {
-	v.cmps = append(v.cmps, cs...)
-	return v
-}
-
-// Then takes a list of operations. The Ops list will be executed, if the
-// comparisons passed in If() succeed.
-func (v *TxnOp) Then(ops ...Op) *TxnOp {
-	v.thenOps = append(v.thenOps, ops...)
-	return v
-}
-
-// Else takes a list of operations. The Ops list will be executed, if the
-// comparisons passed in If() fail.
-func (v *TxnOp) Else(ops ...Op) *TxnOp {
-	v.elseOps = append(v.elseOps, ops...)
-	return v
-}
-
-func (v *TxnOp) Do(ctx context.Context, client etcd.KV, opts ...Option) (TxnResult, error) {
-	op, err := v.Op(ctx)
+	// Do with retry
+	response, err := DoWithRetry(ctx, v.client, op.Op, opts...)
 	if err != nil {
-		return TxnResult{}, err
-	}
-	response, err := DoWithRetry(ctx, client, op, opts...)
-	if err != nil {
-		return TxnResult{}, err
+		return newErrorTxnResult[R](err)
 	}
 
-	return v.mapResponse(ctx, Response{OpResponse: response, Client: client, Options: opts})
-}
-
-func (v *TxnOp) DoWithHeader(ctx context.Context, client etcd.KV, opts ...Option) (*Header, error) {
-	r, err := v.Do(ctx, client, opts...)
-	return r.Header, err
-}
-
-func (v *TxnOp) DoOrErr(ctx context.Context, client etcd.KV, opts ...Option) error {
-	_, err := v.Do(ctx, client, opts...)
-	return err
-}
-
-func (v *TxnOp) Op(ctx context.Context) (etcd.Op, error) {
-	if err := v.initErrs.ErrorOrNil(); err != nil {
-		return etcd.Op{}, err
-	}
-
-	errs := errors.NewMultiError()
-	cmps := make([]etcd.Cmp, len(v.cmps))
-	copy(cmps, v.cmps)
-
-	thenOps := make([]etcd.Op, 0, len(v.thenOps))
-	for i, op := range v.thenOps {
-		etcdOp, err := op.Op(ctx)
-		if err != nil {
-			errs.Append(errors.Errorf("cannot create operation [then][%d]: %w", i, err))
-			continue
-		}
-		thenOps = append(thenOps, etcdOp)
-	}
-
-	elseOps := make([]etcd.Op, 0, len(v.elseOps))
-	for i, op := range v.elseOps {
-		etcdOp, err := op.Op(ctx)
-		if err != nil {
-			errs.Append(errors.Errorf("cannot create operation [else][%d]: %w", i, err))
-			continue
-		}
-		elseOps = append(elseOps, etcdOp)
-	}
-
-	if errs.Len() > 0 {
-		return etcd.Op{}, errs.ErrorOrNil()
-	}
-
-	return etcd.OpTxn(cmps, thenOps, elseOps), nil
-}
-
-func (v *TxnOp) WithProcessor(p txnProcessor) *TxnOp {
-	clone := *v
-	clone.processors = append(clone.processors, p)
-	return &clone
-}
-
-func (v *TxnOp) MapResponse(ctx context.Context, response Response) (result any, err error) {
 	return v.mapResponse(ctx, response)
 }
 
-func (v *TxnOp) mapResponse(ctx context.Context, response Response) (result TxnResult, err error) {
-	r := response.Txn()
-	result.Header = r.Header
-	result.Succeeded = r.Succeeded
+func (v *lowLevelTxn[R]) addParts(ctx context.Context, txn txnInterface) error {
+	if err := txn.txnInitError(); err != nil {
+		return err
+	}
 
 	errs := errors.NewMultiError()
-	if r.Succeeded {
-		for i, subResponse := range r.Responses {
-			subResult, subErr := v.thenOps[i].MapResponse(ctx, toOpResponse(response, subResponse))
-			if subErr != nil {
-				errs.Append(subErr)
-			}
-			result.Results = append(result.Results, subResult)
+	opIndex := make(map[txnPartType]int)
+	for _, part := range txn.txnParts() {
+		if err := v.addPart(ctx, part); err != nil {
+			err = errors.PrefixErrorf(err, `cannot create operation [%s][%d]:`, part.Type, opIndex[part.Type])
+			errs.Append(err)
 		}
-	} else {
-		for i, subResponse := range r.Responses {
-			subResult, subErr := v.elseOps[i].MapResponse(ctx, toOpResponse(response, subResponse))
-			if subErr != nil {
-				errs.Append(subErr)
-			}
-			result.Results = append(result.Results, subResult)
-		}
+		opIndex[part.Type]++
 	}
 
-	err = errs.ErrorOrNil()
-	for _, p := range v.processors {
-		err = p(ctx, response.Txn(), result, err)
-	}
-
-	if err != nil {
-		return TxnResult{}, err
-	}
-
-	return result, nil
+	return errs.ErrorOrNil()
 }
 
-func toOpResponse(response Response, subResponse *etcdserverpb.ResponseOp) Response {
-	var v etcd.OpResponse
-	switch {
-	case subResponse.GetResponseRange() != nil:
-		v = (*etcd.GetResponse)(subResponse.GetResponseRange()).OpResponse()
-	case subResponse.GetResponsePut() != nil:
-		v = (*etcd.PutResponse)(subResponse.GetResponsePut()).OpResponse()
-	case subResponse.GetResponseDeleteRange() != nil:
-		v = (*etcd.DeleteResponse)(subResponse.GetResponseDeleteRange()).OpResponse()
-	case subResponse.GetResponseTxn() != nil:
-		v = (*etcd.TxnResponse)(subResponse.GetResponseTxn()).OpResponse()
-	default:
-		panic(errors.Errorf(`unexpected type "%T"`, subResponse))
+func (v *lowLevelTxn[R]) addPart(ctx context.Context, part txnPart) error {
+	// Add if
+	if part.Type == txnOpIf {
+		v.ifs = append(v.ifs, part.If)
+		return nil
 	}
 
-	return Response{OpResponse: v, Client: response.Client, Options: response.Options}
+	// Merge
+	if part.Type == txnOpMerge {
+		return v.mergeTxn(ctx, part.Op)
+	}
+
+	// Create low-level operation
+	lowLevel, err := part.Op.Op(ctx)
+	if err != nil {
+		return err
+	}
+	switch part.Type {
+	case txnOpThen:
+		if lowLevel.Op.IsTxn() {
+			return errors.New("operation is a transaction, use Merge or ThenTxn, not Then")
+		}
+		v.addThen(lowLevel.Op, lowLevel.MapResponse)
+	case txnOpThenTxn:
+		if !lowLevel.Op.IsTxn() {
+			return errors.New("operation is not a transaction, use Then, not ThenTxn")
+		}
+		v.addThen(lowLevel.Op, lowLevel.MapResponse)
+	case txnOpElse:
+		v.addElse(lowLevel.Op, lowLevel.MapResponse)
+	default:
+		panic(errors.Errorf(`unexpected operation type "%s"`, part.Type))
+	}
+
+	return nil
+}
+
+func (v *lowLevelTxn[R]) addThen(op etcd.Op, mapper MapFn) {
+	v.thenOps = append(v.thenOps, op)
+
+	// If the transaction is successful (then branch), the OP result will be available in the Responses[INDEX],
+	// so we can call original mapper with the sub-response.
+	if mapper != nil {
+		index := len(v.thenOps) - 1
+		v.processors = append(v.processors, func(ctx context.Context, r *TxnResult[R]) {
+			if r.Succeeded() {
+				rawSubResponse := r.Response().Txn().Responses[index]
+				subResponse := r.Response().WithOpResponse(mapRawResponse(rawSubResponse))
+				if _, err := mapper(ctx, subResponse); err != nil {
+					r.AddErr(err)
+				}
+			}
+		})
+	}
+}
+
+func (v *lowLevelTxn[R]) addElse(op etcd.Op, mapper MapFn) {
+	v.elseOps = append(v.elseOps, op)
+
+	// If the transaction is NOT successful (else branch), the OP result will be available in the Responses[INDEX],
+	// so we can call original mapper with the sub-response.
+	if mapper != nil {
+		index := len(v.elseOps) - 1
+		v.processors = append(v.processors, func(ctx context.Context, r *TxnResult[R]) {
+			if !r.Succeeded() {
+				subResponse := r.Response().WithOpResponse(mapRawResponse(r.Response().OpResponse().Txn().Responses[index]))
+				if _, err := mapper(ctx, subResponse); err != nil {
+					r.AddErr(err)
+				}
+			}
+		})
+	}
+}
+
+func (v *lowLevelTxn[R]) mergeTxn(ctx context.Context, op Op) error {
+	// Step down to a nested Merge operation, if there is no processor/else branch.
+	if txn, ok := op.(txnInterface); ok && isSimpleTxn(txn) {
+		if err := v.addParts(ctx, txn); err != nil {
+			return err
+		}
+		v.processors = append(v.processors, func(ctx context.Context, r *TxnResult[R]) {
+			txn.txnInvokeProcessors(ctx, r.resultBase)
+		})
+		return nil
+	}
+
+	// Create low level operation
+	lowLevel, err := op.Op(ctx)
+	if err != nil {
+		return err
+	}
+
+	// If it is not a transaction, process it as Then
+	if !lowLevel.Op.IsTxn() {
+		v.addThen(lowLevel.Op, lowLevel.MapResponse)
+		return nil
+	}
+
+	// Get transaction parts
+	ifs, thenOps, elseOps := lowLevel.Op.Txn()
+
+	// Merge IFs
+	v.ifs = append(v.ifs, ifs...)
+
+	// Merge THEN operations
+	// The THEN branch will be applied, if all conditions (from all sub-transactions) are met.
+	thenStart := len(v.thenOps)
+	thenEnd := thenStart + len(thenOps)
+	for _, item := range thenOps {
+		v.addThen(item, nil)
+	}
+
+	// Merge ELSE operations
+	// The ELSE branch will be applied only if the conditions of the sub-transaction are not met
+	elseTxnPos := -1
+	if len(elseOps) > 0 || len(ifs) > 0 {
+		elseTxnPos = len(v.elseOps)
+		v.addElse(etcd.OpTxn(ifs, nil, elseOps), nil)
+	}
+
+	// There may be a situation where neither THEN nor ELSE branch is executed:
+	// It occurs, when the root transaction fails, but the reason is not in this sub-transaction.
+
+	// On result, compose and map response that corresponds to the original sub-transaction
+	// Processor from nested transactions must be invoked first.
+	v.processors = append(v.processors, func(ctx context.Context, r *TxnResult[R]) {
+		// Get sub-transaction response
+		var subTxnResponse *etcd.TxnResponse
+		switch {
+		case r.Succeeded():
+			subTxnResponse = &etcd.TxnResponse{
+				// The entire transaction succeeded, which means that a partial transaction succeeded as well
+				Succeeded: true,
+				// Compose responses that corresponds to the original sub-transaction
+				Responses: r.Response().Txn().Responses[thenStart:thenEnd],
+			}
+		case elseTxnPos >= 0:
+			subTxnResponse = (*etcd.TxnResponse)(r.Response().Txn().Responses[elseTxnPos].GetResponseTxn())
+			if subTxnResponse.Succeeded {
+				// Skip mapper bellow, the transaction failed, but not due to a condition in the sub-transaction
+				return
+			}
+		default:
+			// Skip mapper bellow, the transaction failed, but there is no condition in the sub-transaction
+			return
+		}
+
+		// Call original mapper of the sub transaction
+		if _, err := lowLevel.MapResponse(ctx, r.Response().WithOpResponse(subTxnResponse.OpResponse())); err != nil {
+			r.AddErr(err)
+		}
+	})
+
+	return nil
+}
+
+func (v *lowLevelTxn[R]) mapResponse(ctx context.Context, raw *RawResponse) *TxnResult[R] {
+	result := newTxnResult(newResultBase(raw), v.result)
+	for _, p := range v.processors {
+		p(ctx, result)
+	}
+	return result
+}
+
+// isSimpleTxn returns true if the transaction has no IF/ELSE branch.
+// In that case, it is possible to merge it more easily: IF/THEN parts are added to the parent transaction.
+func isSimpleTxn(txn txnInterface) bool {
+	for _, part := range txn.txnParts() {
+		if part.Type == txnOpIf {
+			return false
+		}
+		if part.Type == txnOpElse {
+			return false
+		}
+	}
+	return true
 }

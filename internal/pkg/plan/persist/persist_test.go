@@ -11,6 +11,7 @@ import (
 	"github.com/keboola/go-utils/pkg/orderedmap"
 	"github.com/spf13/cast"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/encoding/json"
 	"github.com/keboola/keboola-as-code/internal/pkg/env"
@@ -36,7 +37,7 @@ func TestPersistNoChange(t *testing.T) {
 	t.Parallel()
 	tc := testCase{
 		inputDir:       `persist-no-change`,
-		untrackedPaths: nil,
+		untrackedPaths: []string{},
 		expectedPlan:   nil,
 	}
 	tc.run(t)
@@ -242,7 +243,7 @@ func TestPersistDeleted(t *testing.T) {
 	t.Parallel()
 	tc := testCase{
 		inputDir:       `persist-deleted`,
-		untrackedPaths: nil,
+		untrackedPaths: []string{},
 		expectedPlan: []action{
 			&deleteManifestRecordAction{
 				ObjectManifest: &model.ConfigManifest{
@@ -617,7 +618,7 @@ func TestPersistSharedCodeWithVariables(t *testing.T) {
 					Content: orderedmap.FromPairs([]orderedmap.Pair{
 						{
 							Key: "variables",
-							Value: []interface{}{
+							Value: []any{
 								orderedmap.FromPairs([]orderedmap.Pair{
 									{
 										Key:   "name",
@@ -741,7 +742,7 @@ func TestPersistVariables(t *testing.T) {
 					Content: orderedmap.FromPairs([]orderedmap.Pair{
 						{
 							Key: "variables",
-							Value: []interface{}{
+							Value: []any{
 								orderedmap.FromPairs([]orderedmap.Pair{
 									{
 										Key:   "name",
@@ -793,7 +794,7 @@ func TestPersistVariables(t *testing.T) {
 					Content: orderedmap.FromPairs([]orderedmap.Pair{
 						{
 							Key: "values",
-							Value: []interface{}{
+							Value: []any{
 								orderedmap.FromPairs([]orderedmap.Pair{
 									{
 										Key:   "name",
@@ -910,6 +911,8 @@ func TestPersistScheduler(t *testing.T) {
 func (tc *testCase) run(t *testing.T) {
 	t.Helper()
 
+	ctx := context.Background()
+
 	// Init project dir
 	_, testFile, _, _ := runtime.Caller(0)
 	testDir := filesystem.Dir(testFile)
@@ -919,23 +922,24 @@ func (tc *testCase) run(t *testing.T) {
 	fs := aferofs.NewMemoryFsFrom(inputDir)
 	envs := env.Empty()
 	envs.Set(`LOCAL_PROJECT_ID`, `12345`)
-	testhelper.MustReplaceEnvsDir(fs, `/`, envs)
+	err := testhelper.ReplaceEnvsDir(ctx, fs, `/`, envs)
+	require.NoError(t, err)
 
 	// Container
-	d := dependencies.NewMocked(t)
+	d := dependencies.NewMocked(t, context.Background())
 
 	// Register new IDs API responses
 	var ticketResponses []*http.Response
 	for i := 1; i <= tc.expectedNewIds; i++ {
-		response, err := httpmock.NewJsonResponse(200, map[string]interface{}{"id": cast.ToString(1000 + i)})
-		assert.NoError(t, err)
+		response, err := httpmock.NewJsonResponse(200, map[string]any{"id": cast.ToString(1000 + i)})
+		require.NoError(t, err)
 		ticketResponses = append(ticketResponses, response)
 	}
 	d.MockedHTTPTransport().RegisterResponder("POST", `=~/storage/tickets`, httpmock.ResponderFromMultipleResponses(ticketResponses))
 
 	// Load state
 	projectState, err := d.MockedProject(fs).LoadState(loadState.Options{LoadLocalState: true, IgnoreNotFoundErr: true}, d)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Assert state before
 	assert.Equal(t, tc.untrackedPaths, projectState.UntrackedPaths())
@@ -949,8 +953,8 @@ func (tc *testCase) run(t *testing.T) {
 	}
 
 	// Get plan
-	plan, err := NewPlan(projectState.State())
-	assert.NoError(t, err)
+	plan, err := NewPlan(ctx, projectState.State())
+	require.NoError(t, err)
 
 	// Delete callbacks for easier comparison (we only check callbacks result)
 	for _, action := range plan.actions {
@@ -963,9 +967,9 @@ func (tc *testCase) run(t *testing.T) {
 	assert.Equalf(t, tc.expectedPlan, plan.actions, `unexpected persist plan`)
 
 	// Invoke
-	plan, err = NewPlan(projectState.State()) // plan with callbacks
-	assert.NoError(t, err)
-	assert.NoError(t, plan.Invoke(context.Background(), d.Logger(), d.KeboolaProjectAPI(), projectState.State()))
+	plan, err = NewPlan(ctx, projectState.State()) // plan with callbacks
+	require.NoError(t, err)
+	require.NoError(t, plan.Invoke(ctx, d.Logger(), d.KeboolaProjectAPI(), projectState.State()))
 
 	// Assert new IDs requests count
 	assert.Equal(t, tc.expectedNewIds, d.MockedHTTPTransport().GetCallCountInfo()["POST =~/storage/tickets"])

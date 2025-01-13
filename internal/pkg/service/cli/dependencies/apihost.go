@@ -1,12 +1,14 @@
 package dependencies
 
 import (
+	"context"
 	"net/url"
 	"strings"
 
+	"github.com/keboola/keboola-as-code/internal/pkg/env"
+	"github.com/keboola/keboola-as-code/internal/pkg/log"
 	projectManifest "github.com/keboola/keboola-as-code/internal/pkg/project/manifest"
-	"github.com/keboola/keboola-as-code/internal/pkg/service/cli/options"
-	"github.com/keboola/keboola-as-code/internal/pkg/service/common/cliconfig"
+	"github.com/keboola/keboola-as-code/internal/pkg/service/common/configmap"
 	"github.com/keboola/keboola-as-code/internal/pkg/utils/errors"
 	"github.com/keboola/keboola-as-code/internal/pkg/utils/strhelper"
 )
@@ -19,13 +21,13 @@ import (
 // 2. Flag.
 // 3. ENV
 // 4. An env file, e.g., ".env.local".
-func storageAPIHost(baseScp BaseScope, fallback string) (string, error) {
-	fs, opts := baseScp.Fs(), baseScp.Options()
+func storageAPIHost(ctx context.Context, baseScp BaseScope, fallback string, hostByFlag configmap.Value[string]) (string, error) {
+	fs := baseScp.Fs()
 
 	var host string
-	if fs.IsFile(projectManifest.Path()) {
+	if fs.IsFile(ctx, projectManifest.Path()) {
 		// Get host from manifest
-		m, err := projectManifest.Load(fs, true)
+		m, err := projectManifest.Load(ctx, log.NewNopLogger(), fs, env.Empty(), true)
 		if err != nil {
 			return "", err
 		} else {
@@ -33,9 +35,9 @@ func storageAPIHost(baseScp BaseScope, fallback string) (string, error) {
 		}
 	} else {
 		// Get host from options (ENV/flag)
-		host = opts.GetString(options.StorageAPIHostOpt)
-		if opts.KeySetBy(options.StorageAPIHostOpt) == cliconfig.SetByEnv {
-			baseScp.Logger().Infof(`Storage API host "%s" set from ENV.`, host)
+		host = hostByFlag.Value
+		if hostByFlag.SetBy == configmap.SetByEnv {
+			baseScp.Logger().Infof(ctx, `Storage API host "%s" set from ENV.`, host)
 		}
 	}
 

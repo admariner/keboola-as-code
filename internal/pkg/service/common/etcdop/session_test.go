@@ -2,65 +2,111 @@ package etcdop
 
 import (
 	"context"
-	"runtime"
+	"os"
 	"sync"
 	"testing"
 	"time"
 
+	toxiproxy "github.com/Shopify/toxiproxy/v2"
 	"github.com/cenkalti/backoff/v4"
-	"github.com/keboola/go-utils/pkg/wildcards"
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.etcd.io/etcd/client/v3/concurrency"
-	"go.etcd.io/etcd/tests/v3/integration"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/log"
+	"github.com/keboola/keboola-as-code/internal/pkg/utils/errors"
+	"github.com/keboola/keboola-as-code/internal/pkg/utils/etcdhelper"
 )
 
-func TestResistantSession(t *testing.T) {
+func TestSession_Retries(t *testing.T) {
 	t.Parallel()
-	if runtime.GOOS != "linux" {
-		t.Skipf(`etcd session is tested only on Linux`)
-	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	wg := &sync.WaitGroup{}
 
-	// Create etcd cluster for test
-	integration.BeforeTestExternal(t)
-	cluster := integration.NewClusterV3(t, &integration.ClusterConfig{Size: 1, UseBridge: true})
-	defer cluster.Terminate(t)
-	cluster.WaitLeader(t)
-	member := cluster.Members[0]
-	client := cluster.Client(0)
+	// Get credentials
+	etcdCfg := etcdhelper.TmpNamespace(t)
 
-	// Setup resistant session
+	// Setup proxy to drop etcd connection
+	proxy := toxiproxy.NewProxy(toxiproxy.NewServer(toxiproxy.NewMetricsContainer(nil), zerolog.New(os.Stderr)), "etcd-bridge", "", etcdCfg.Endpoint)
+	require.NoError(t, proxy.Start())
+	defer proxy.Stop()
+
+	// Use proxy
+	etcdCfg.Endpoint = proxy.Listen
+
+	// Create client
+	client := etcdhelper.ClientForTest(t, etcdCfg)
+
+	// Setup session
 	logger := log.NewDebugLogger()
-	ttlSeconds := 1
-	assert.NoError(t, <-ResistantSession(ctx, wg, logger, client, ttlSeconds, func(session *concurrency.Session) error {
-		logger.Info("----> new session")
-		return nil
-	}))
+	session, errCh := NewSessionBuilder().
+		WithGrantTimeout(1*time.Second).
+		WithTTLSeconds(15).
+		WithOnSession(func(session *concurrency.Session) error {
+			require.NotNil(t, session)
+			logger.Info(ctx, "----> new session (1)")
+			return nil
+		}).
+		WithOnSession(func(session *concurrency.Session) error {
+			require.NotNil(t, session)
+			logger.Info(ctx, "----> new session (2)")
+			return nil
+		}).
+		Start(ctx, wg, logger, client)
+	require.NoError(t, <-errCh)
+	lowLevelSession, err := session.Session()
+	require.NotNil(t, lowLevelSession)
+	require.NoError(t, err)
 
-	// Drop connection for 7 seconds (dial timeout is 5 seconds)
-	member.Bridge().PauseConnections()
-	member.Bridge().DropConnections()
-	time.Sleep(7 * time.Second)
-	member.Bridge().UnpauseConnections()
+	// Drop connection
+	proxy.Stop()
+	assert.EventuallyWithT(t, func(c *assert.CollectT) {
+		logger.AssertJSONMessages(c, `
+{"level":"info","message":"etcd session canceled"}
+{"level":"info","message":"creating etcd session"}
+{"level":"info","message":"cannot create etcd session: context deadline exceeded"}
+{"level":"info","message":"waiting %s before the retry"}
+`)
+	}, 30*time.Second, 100*time.Millisecond)
+
+	// There is no active session
+	lowLevelSession, err = session.Session()
+	require.Nil(t, lowLevelSession)
+	if assert.Error(t, err) {
+		assert.True(t, errors.As(err, &NoSessionError{}))
+	}
+
+	// Resume connection
+	require.NoError(t, proxy.Start())
+
+	// Wait for the new session
+	_, err = session.WaitForSession(ctx)
+	require.NoError(t, err)
+	lowLevelSession, err = session.Session()
+	assert.NotNil(t, lowLevelSession)
+	require.NoError(t, err)
 
 	// Stop and check logs
 	cancel()
 	wg.Wait()
-	wildcards.Assert(t, `
-[etcd-session]INFO  creating etcd session
-[etcd-session]INFO  created etcd session | %s
-INFO  ----> new session
-[etcd-session]INFO  re-creating etcd session, backoff delay %s
-[etcd-session]INFO  created etcd session | %s
-INFO  ----> new session
-[etcd-session]INFO  closing etcd session
-[etcd-session]INFO  closed etcd session | %s
-`, logger.AllMessages())
+	logger.AssertJSONMessages(t, `
+{"level":"info","message":"creating etcd session","component":"etcd.session"}
+{"level":"info","message":"created etcd session","duration":"%s"}
+{"level":"info","message":"----> new session (1)"}
+{"level":"info","message":"----> new session (2)"}
+{"level":"info","message":"etcd session canceled"}
+{"level":"info","message":"creating etcd session"}
+{"level":"info","message":"cannot create etcd session: context deadline exceeded"}
+{"level":"info","message":"waiting %s before the retry"}
+{"level":"info","message":"creating etcd session"}
+{"level":"info","message":"created etcd session"}
+{"level":"info","message":"----> new session (1)"}
+{"level":"info","message":"----> new session (2)"}
+{"level":"info","message":"closing etcd session: context canceled"}
+{"level":"info","message":"closed etcd session","duration":"%s"}
+`)
 }
 
 func TestSessionBackoff(t *testing.T) {
@@ -70,8 +116,8 @@ func TestSessionBackoff(t *testing.T) {
 	b.RandomizationFactor = 0
 
 	// Get all delays without sleep
-	var delays []time.Duration
-	for i := 0; i < 14; i++ {
+	delays := make([]time.Duration, 0, 14)
+	for range 14 {
 		delay := b.NextBackOff()
 		if delay == backoff.Stop {
 			assert.Fail(t, "unexpected stop")

@@ -35,22 +35,22 @@ type Project struct {
 	initStartedAt     time.Time
 	ctx               context.Context
 	storageAPIToken   *keboola.Token
-	keboolaProjectAPI *keboola.API
+	keboolaProjectAPI *keboola.AuthorizedAPI
 	defaultBranch     *keboola.Branch
 	envs              *env.Map
 	mapsLock          *sync.Mutex
 	stateFilePath     string
 	branchesByID      map[keboola.BranchID]*keboola.Branch
 	branchesByName    map[string]*keboola.Branch
-	logFn             func(format string, a ...interface{})
+	logFn             func(format string, a ...any)
 }
 
 type UnlockFn func()
 
-func GetTestProjectForTest(t *testing.T) *Project {
+func GetTestProjectForTest(t *testing.T, path string, options ...testproject.Option) *Project {
 	t.Helper()
 
-	p, unlockFn, err := GetTestProject(env.Empty())
+	p, unlockFn, err := GetTestProject(path, env.Empty(), options...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,22 +60,22 @@ func GetTestProjectForTest(t *testing.T) *Project {
 		unlockFn()
 	})
 
-	p.logFn = func(format string, a ...interface{}) {
+	p.logFn = func(format string, a ...any) {
 		seconds := float64(time.Since(p.initStartedAt).Milliseconds()) / 1000
-		a = append([]interface{}{p.ID(), t.Name(), seconds}, a...)
+		a = append([]any{p.ID(), t.Name(), seconds}, a...)
 		t.Logf("TestProject[%d][%s][%05.2fs]: "+format, a...)
 	}
 
 	return p
 }
 
-func GetTestProject(envs *env.Map) (*Project, UnlockFn, error) {
-	project, unlockFn, err := testproject.GetTestProject()
+func GetTestProject(path string, envs *env.Map, options ...testproject.Option) (*Project, UnlockFn, error) {
+	project, unlockFn, err := testproject.GetTestProjectInPath(path, options...)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	ctx, cancelFn := context.WithCancel(context.Background())
+	ctx, cancelFn := context.WithCancel(context.Background()) // nolint: contextcheck
 	p := &Project{Project: project, initStartedAt: time.Now(), ctx: ctx, mapsLock: &sync.Mutex{}}
 	p.logf("□ Initializing project...")
 
@@ -86,7 +86,7 @@ func GetTestProject(envs *env.Map) (*Project, UnlockFn, error) {
 
 	// Init storage API
 	httpClient := client.NewTestClient()
-	p.keboolaProjectAPI, err = keboola.NewAPI(ctx, p.StorageAPIHost(), keboola.WithClient(&httpClient), keboola.WithToken(p.Project.StorageAPIToken()))
+	p.keboolaProjectAPI, err = keboola.NewAuthorizedAPI(ctx, p.StorageAPIHost(), p.Project.StorageAPIToken(), keboola.WithClient(&httpClient), keboola.WithOnSuccessTimeout(1*time.Minute))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -116,10 +116,12 @@ func GetTestProject(envs *env.Map) (*Project, UnlockFn, error) {
 	p.setEnv(`TEST_KBC_PROJECT_STAGING_STORAGE`, p.Project.StagingStorage())
 	p.setEnv(`TEST_KBC_STORAGE_API_HOST`, p.Project.StorageAPIHost())
 	p.setEnv(`TEST_KBC_STORAGE_API_TOKEN`, p.Project.StorageAPIToken())
+	p.setEnv(`TEST_KBC_PROJECT_BACKEND`, p.Project.Backend())
+	p.setEnv(`TEST_KBC_PROJECT_LEGACY_TRANSFORMATION`, strconv.FormatBool(p.Project.LegacyTransformation()))
 	p.logf(`■ ️Initialization done.`)
 
 	// Remove all objects
-	if err := p.Clean(); err != nil {
+	if err := p.Clean(); !p.IsGuest() && err != nil {
 		cleanupFn()
 		return nil, nil, err
 	}
@@ -146,7 +148,11 @@ func (p *Project) StorageAPIToken() *keboola.Token {
 	return p.storageAPIToken
 }
 
-func (p *Project) KeboolaProjectAPI() *keboola.API {
+func (p *Project) PublicAPI() *keboola.PublicAPI {
+	return p.keboolaProjectAPI.PublicAPI
+}
+
+func (p *Project) ProjectAPI() *keboola.AuthorizedAPI {
 	return p.keboolaProjectAPI
 }
 
@@ -211,9 +217,11 @@ func (p *Project) SetState(stateFilePath string) error {
 	}
 
 	// Create branches
-	err = p.createBranches(stateFile.Branches)
-	if err != nil {
-		return err
+	if !p.IsGuest() {
+		err = p.createBranches(stateFile.Branches)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Create configs in branches
@@ -234,10 +242,12 @@ func (p *Project) SetState(stateFilePath string) error {
 		return err
 	}
 
-	// Create sandboxes in default branch
-	err = p.createSandboxes(p.defaultBranch.ID, stateFile.Sandboxes)
-	if err != nil {
-		return err
+	if !p.IsGuest() {
+		// Create sandboxes in default branch
+		err = p.createSandboxes(p.defaultBranch.ID, stateFile.Sandboxes)
+		if err != nil {
+			return err
+		}
 	}
 
 	p.logf("■ Project state set.")
@@ -257,7 +267,6 @@ func (p *Project) createBranches(branches []*fixtures.BranchState) error {
 	// Create branches
 	grp := request.NewWaitGroup(ctx)
 	for _, fixture := range branches {
-		fixture := fixture
 		grp.Send(p.createBranchRequest(fixture, createBranchSem))
 	}
 
@@ -277,7 +286,10 @@ func (p *Project) createBucketsTables(buckets []*fixtures.Bucket) error {
 	for _, b := range buckets {
 		req := p.keboolaProjectAPI.
 			CreateBucketRequest(&keboola.Bucket{
-				ID:          b.ID,
+				BucketKey: keboola.BucketKey{
+					BranchID: p.defaultBranch.ID,
+					BucketID: b.ID,
+				},
 				Description: b.Description,
 			}).
 			WithBefore(func(ctx context.Context) error {
@@ -286,15 +298,16 @@ func (p *Project) createBucketsTables(buckets []*fixtures.Bucket) error {
 			}).
 			WithOnComplete(func(ctx context.Context, apiBucket *keboola.Bucket, err error) error {
 				if err == nil {
-					p.logf("✔️ Bucket \"%s\".", apiBucket.ID)
+					p.logf("✔️ Bucket \"%s\".", apiBucket.BucketID)
 
 					for _, t := range b.Tables {
+						tableKey := keboola.TableKey{BranchID: p.defaultBranch.ID, TableID: t.ID}
 						if len(t.Rows) > 0 {
 							p.logf("▶ Table (with rows) \"%s\"...", t.Name)
 
 							fileName := fmt.Sprintf("%s.data", t.ID)
 							p.logf("▶ Table \"%s\" file resource \"%s\"...", t.Name, fileName)
-							file, err := p.keboolaProjectAPI.CreateFileResourceRequest(fileName).Send(ctx)
+							file, err := p.keboolaProjectAPI.CreateFileResourceRequest(p.defaultBranch.ID, fileName).Send(ctx)
 							if err != nil {
 								return err
 							}
@@ -318,14 +331,14 @@ func (p *Project) createBucketsTables(buckets []*fixtures.Bucket) error {
 							p.logf("✔️ Upload file \"%s\".", fileName)
 
 							p.logf("▶ Table \"%s\" from file resource \"%s\"...", t.Name, fileName)
-							_, err = p.keboolaProjectAPI.CreateTableFromFileRequest(t.ID, file.ID, keboola.WithPrimaryKey(t.PrimaryKey)).Send(ctx)
+							_, err = p.keboolaProjectAPI.CreateTableFromFileRequest(tableKey, file.FileKey, keboola.WithPrimaryKey(t.PrimaryKey)).Send(ctx)
 							if err != nil {
 								return err
 							}
 							p.logf("✔️ Table (with rows) \"%s\"(%s).", t.Name, t.ID)
 						} else {
 							p.logf("▶ Table \"%s\"...", t.Name)
-							_, err = p.keboolaProjectAPI.CreateTableRequest(t.ID, t.Columns, keboola.WithPrimaryKey(t.PrimaryKey)).Send(ctx)
+							_, err = p.keboolaProjectAPI.CreateTableRequest(tableKey, t.Columns, keboola.WithPrimaryKey(t.PrimaryKey)).Send(ctx)
 							if err != nil {
 								return err
 							}
@@ -355,8 +368,6 @@ func (p *Project) createFiles(files []*fixtures.File) error {
 	errs := errors.NewMultiError()
 
 	for _, fixture := range files {
-		fixture := fixture
-
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -367,7 +378,7 @@ func (p *Project) createFiles(files []*fixtures.File) error {
 			opts = append(opts, keboola.WithTags(fixture.Tags...))
 
 			p.logf("▶ File \"%s\"...", fixture.Name)
-			file, err := p.keboolaProjectAPI.CreateFileResourceRequest(fixture.Name, opts...).Send(ctx)
+			file, err := p.keboolaProjectAPI.CreateFileResourceRequest(p.defaultBranch.ID, fixture.Name, opts...).Send(ctx)
 			if err != nil {
 				errs.Append(errors.Errorf("could not create file \"%s\": %w", fixture.Name, err))
 				return
@@ -398,8 +409,8 @@ func (p *Project) createFiles(files []*fixtures.File) error {
 				}
 			}
 
-			p.logf("✔️ File \"%s\"(%s).", file.Name, file.ID)
-			p.setEnv(fmt.Sprintf("TEST_FILE_%s_ID", fixture.Name), strconv.Itoa(file.ID))
+			p.logf("✔️ File \"%s\"(%s).", file.Name, file.FileID)
+			p.setEnv(fmt.Sprintf("TEST_FILE_%s_ID", fixture.Name), file.FileID.String())
 		}()
 	}
 
@@ -419,8 +430,6 @@ func (p *Project) createSandboxes(defaultBranchID keboola.BranchID, sandboxes []
 	errs := errors.NewMultiError()
 
 	for _, fixture := range sandboxes {
-		fixture := fixture
-
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -602,7 +611,6 @@ func (p *Project) prepareConfigs(ctx context.Context, grp *errgroup.Group, sendR
 
 		// For each row
 		for rowIndex, row := range configWithRows.Rows {
-			rowIndex, row := rowIndex, row
 			rowDesc := fmt.Sprintf("%s/%s", configDesc, row.Name)
 
 			// Generate ID for row
@@ -692,7 +700,7 @@ func (p *Project) logEnvs() {
 	}
 }
 
-func (p *Project) logf(format string, a ...interface{}) {
+func (p *Project) logf(format string, a ...any) {
 	if testhelper.TestIsVerbose() && p.logFn != nil {
 		p.logFn(format, a...)
 	}

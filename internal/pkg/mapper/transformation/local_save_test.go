@@ -6,6 +6,7 @@ import (
 
 	"github.com/keboola/go-utils/pkg/deepcopy"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/encoding/json"
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem"
@@ -17,7 +18,7 @@ import (
 
 func TestLocalSaveTransformationEmpty(t *testing.T) {
 	t.Parallel()
-	d := dependencies.NewMocked(t)
+	d := dependencies.NewMocked(t, context.Background())
 	state := d.MockedState()
 	state.Mapper().AddMapper(corefiles.NewMapper(state))
 	state.Mapper().AddMapper(transformation.NewMapper(state))
@@ -28,18 +29,18 @@ func TestLocalSaveTransformationEmpty(t *testing.T) {
 	recipe := model.NewLocalSaveRecipe(configState.Manifest(), object, model.NewChangedFields())
 
 	blocksDir := filesystem.Join(`branch`, `config`, `blocks`)
-	assert.NoError(t, fs.Mkdir(blocksDir))
+	require.NoError(t, fs.Mkdir(context.Background(), blocksDir))
 
 	// Save
 	err := state.Mapper().MapBeforeLocalSave(context.Background(), recipe)
-	assert.NoError(t, err)
-	assert.NoError(t, err)
-	assert.Equal(t, `{"foo":"bar"}`, json.MustEncodeString(object.Content, false))
+	require.NoError(t, err)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"foo":"bar"}`, json.MustEncodeString(object.Content, false))
 }
 
 func TestTransformationMapper_MapBeforeLocalSave(t *testing.T) {
 	t.Parallel()
-	d := dependencies.NewMocked(t)
+	d := dependencies.NewMocked(t, context.Background())
 	state := d.MockedState()
 	state.Mapper().AddMapper(corefiles.NewMapper(state))
 	state.Mapper().AddMapper(transformation.NewMapper(state))
@@ -52,7 +53,7 @@ func TestTransformationMapper_MapBeforeLocalSave(t *testing.T) {
 
 	configDir := filesystem.Join(`branch`, `config`)
 	blocksDir := filesystem.Join(configDir, `blocks`)
-	assert.NoError(t, fs.Mkdir(blocksDir))
+	require.NoError(t, fs.Mkdir(context.Background(), blocksDir))
 
 	// Prepare
 	object.Content.Set(`foo`, `bar`)
@@ -144,11 +145,11 @@ func TestTransformationMapper_MapBeforeLocalSave(t *testing.T) {
 	}
 
 	// Save
-	assert.NoError(t, state.Mapper().MapBeforeLocalSave(context.Background(), recipe))
+	require.NoError(t, state.Mapper().MapBeforeLocalSave(context.Background(), recipe))
 	assert.Empty(t, logger.WarnAndErrorMessages())
 
 	// Minify JSON + remove file description
-	var files []filesystem.File
+	files := make([]filesystem.File, 0, len(recipe.Files.All()))
 	for _, file := range recipe.Files.All() {
 		var fileRaw *filesystem.RawFile
 		if f, ok := file.(*filesystem.JSONFile); ok {
@@ -158,7 +159,7 @@ func TestTransformationMapper_MapBeforeLocalSave(t *testing.T) {
 		} else {
 			var err error
 			fileRaw, err = file.ToRawFile()
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			fileRaw.SetDescription(``)
 		}
 		files = append(files, fileRaw)

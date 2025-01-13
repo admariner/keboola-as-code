@@ -1,11 +1,13 @@
 package upgrade
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
 	"github.com/keboola/go-utils/pkg/orderedmap"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/log"
 	"github.com/keboola/keboola-as-code/internal/pkg/model"
@@ -17,14 +19,14 @@ type configInput struct {
 	id         string
 	inMetadata bool
 	inContent  bool
-	value      interface{}
+	value      any
 }
 
 type rowInput struct {
 	id         string
 	inMetadata bool
 	inContent  bool
-	value      interface{}
+	value      any
 }
 
 type testCase struct {
@@ -350,7 +352,6 @@ func TestExportInputsValues(t *testing.T) {
 
 	// Test all cases
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			tc.run(t)
@@ -361,8 +362,10 @@ func TestExportInputsValues(t *testing.T) {
 func (tc testCase) run(t *testing.T) {
 	t.Helper()
 
+	ctx := context.Background()
+
 	// Create objects
-	d := dependencies.NewMocked(t)
+	d := dependencies.NewMocked(t, ctx)
 	state := d.MockedState()
 	branchKey := model.BranchKey{ID: 123}
 	configKey := model.ConfigKey{BranchID: 123, ComponentID: "foo.bar", ID: "111"}
@@ -384,7 +387,7 @@ func (tc testCase) run(t *testing.T) {
 			configMetadata.AddInputUsage(inputDef.id, orderedmap.PathFromStr(contentKey), nil)
 		}
 		if inputDef.inContent {
-			assert.NoError(t, configContent.SetNested(contentKey, inputDef.value))
+			require.NoError(t, configContent.SetNested(contentKey, inputDef.value))
 		}
 	}
 
@@ -395,22 +398,22 @@ func (tc testCase) run(t *testing.T) {
 			configMetadata.AddRowInputUsage(configRowKey.ID, inputDef.id, orderedmap.PathFromStr(contentKey), nil)
 		}
 		if inputDef.inContent {
-			assert.NoError(t, rowContent.SetNested(contentKey, inputDef.value))
+			require.NoError(t, rowContent.SetNested(contentKey, inputDef.value))
 		}
 	}
 
 	// Set objects to state
-	assert.NoError(t, state.Set(&model.ConfigState{
+	require.NoError(t, state.Set(&model.ConfigState{
 		ConfigManifest: &model.ConfigManifest{ConfigKey: configKey},
 		Local:          &model.Config{ConfigKey: configKey, Metadata: configMetadata, Content: configContent},
 	}))
-	assert.NoError(t, state.Set(&model.ConfigRowState{
+	require.NoError(t, state.Set(&model.ConfigRowState{
 		ConfigRowManifest: &model.ConfigRowManifest{ConfigRowKey: configRowKey},
 		Local:             &model.ConfigRow{ConfigRowKey: configRowKey, Content: rowContent},
 	}))
 
 	// Assert inputs
-	actual := ExportInputsValues(log.NewNopLogger().DebugWriter(), state, branchKey, instanceID, tc.templateInputs)
+	actual := ExportInputsValues(context.Background(), log.NewNopLogger().Debugf, state, branchKey, instanceID, tc.templateInputs)
 	assert.Equal(t, tc.expected, actual.ToValue())
 
 	// Assert steps state

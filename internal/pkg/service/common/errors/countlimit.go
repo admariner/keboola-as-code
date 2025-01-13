@@ -3,6 +3,8 @@ package errors
 import (
 	"fmt"
 	"net/http"
+
+	"github.com/keboola/keboola-as-code/internal/pkg/utils/errors"
 )
 
 type CountLimitReachedError struct {
@@ -11,8 +13,8 @@ type CountLimitReachedError struct {
 	in   string
 }
 
-func NewCountLimitReachedError(what string, max int, in string) CountLimitReachedError {
-	return CountLimitReachedError{what: what, max: max, in: in}
+func NewCountLimitReachedError(what string, maximum int, in string) CountLimitReachedError {
+	return CountLimitReachedError{what: what, max: maximum, in: in}
 }
 
 func (e CountLimitReachedError) ErrorName() string {
@@ -28,5 +30,5 @@ func (e CountLimitReachedError) Error() string {
 }
 
 func (e CountLimitReachedError) ErrorUserMessage() string {
-	return e.Error()
+	return errors.Format(e, errors.FormatAsSentences())
 }

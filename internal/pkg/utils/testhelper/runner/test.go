@@ -22,6 +22,7 @@ import (
 	"github.com/keboola/go-utils/pkg/wildcards"
 	"github.com/spf13/cast"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/umisama/go-regexpcache"
 	goValuate "gopkg.in/Knetic/govaluate.v3"
 
@@ -29,6 +30,7 @@ import (
 	"github.com/keboola/keboola-as-code/internal/pkg/env"
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem"
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem/aferofs"
+	"github.com/keboola/keboola-as-code/internal/pkg/log"
 	"github.com/keboola/keboola-as-code/internal/pkg/utils/errors"
 	"github.com/keboola/keboola-as-code/internal/pkg/utils/netutils"
 	"github.com/keboola/keboola-as-code/internal/pkg/utils/testhelper"
@@ -179,7 +181,8 @@ func (t *Test) Run(opts ...Options) {
 	}
 
 	// Replace all %%ENV_VAR%% in all files of the working directory.
-	testhelper.MustReplaceEnvsDir(t.workingDirFS, `/`, t.envProvider)
+	err := testhelper.ReplaceEnvsDir(t.ctx, t.workingDirFS, `/`, t.envProvider)
+	require.NoError(t.t, err)
 
 	if c.cliBinaryPath != "" {
 		// Run a CLI binary
@@ -206,22 +209,22 @@ func (t *Test) Run(opts ...Options) {
 }
 
 func (t *Test) copyInToWorkingDir() {
-	if !t.testDirFS.IsDir(inDirName) {
+	if !t.testDirFS.IsDir(t.ctx, inDirName) {
 		t.t.Fatalf(`Missing directory "%s" in "%s".`, inDirName, t.testDir)
 	}
-	assert.NoError(t.t, aferofs.CopyFs2Fs(t.testDirFS, inDirName, t.workingDirFS, `/`))
+	require.NoError(t.t, aferofs.CopyFs2Fs(t.testDirFS, inDirName, t.workingDirFS, `/`))
 }
 
 func (t *Test) initProjectState() {
-	if t.testDirFS.IsFile(initialStateFileName) {
+	if t.testDirFS.IsFile(t.ctx, initialStateFileName) {
 		err := t.project.SetState(filesystem.Join(t.testDir, initialStateFileName))
-		assert.NoError(t.t, err)
+		require.NoError(t.t, err)
 	}
 }
 
 func (t *Test) addEnvVarsFromFile() {
-	if t.testDirFS.Exists(envFileName) {
-		envFile, err := t.testDirFS.ReadFile(filesystem.NewFileDef(envFileName))
+	if t.testDirFS.Exists(t.ctx, envFileName) {
+		envFile, err := t.testDirFS.ReadFile(t.ctx, filesystem.NewFileDef(envFileName))
 		if err != nil {
 			t.t.Fatalf(`Cannot load "%s" file %s`, envFileName, err)
 		}
@@ -242,7 +245,7 @@ func (t *Test) addEnvVarsFromFile() {
 
 func (t *Test) runCLIBinary(path string) {
 	// Load command arguments from file
-	argsFile, err := t.TestDirFS().ReadFile(filesystem.NewFileDef("args"))
+	argsFile, err := t.TestDirFS().ReadFile(t.ctx, filesystem.NewFileDef("args"))
 	if err != nil {
 		t.T().Fatalf(`cannot open "%s" test file %s`, "args", err)
 	}
@@ -261,7 +264,7 @@ func (t *Test) runCLIBinary(path string) {
 	cmd.Dir = t.workingDir
 
 	// Setup command input/output
-	cmdInOut, err := setupCmdInOut(t.t, t.envProvider, t.testDirFS, cmd)
+	cmdInOut, err := setupCmdInOut(t.ctx, t.t, t.envProvider, t.testDirFS, cmd)
 	if err != nil {
 		t.t.Fatal(err.Error())
 	}
@@ -331,20 +334,14 @@ func (t *Test) runAPIServer(
 	requestDecoratorFn func(request *APIRequestDef),
 ) {
 	// Get a free port
-	listenPort, err := netutils.FreePort()
-	if err != nil {
-		t.t.Fatalf("Could not receive a free port: %s", err)
-	}
-	metricsListenPort, err := netutils.FreePort()
-	if err != nil {
-		t.t.Fatalf("Could not receive a free port: %s", err)
-	}
+	listenPort := netutils.FreePortForTest(t.t)
+	metricsListenPort := netutils.FreePortForTest(t.t)
 	listenAddress := fmt.Sprintf("localhost:%d", listenPort)
 	metricsListenAddress := fmt.Sprintf("localhost:%d", metricsListenPort)
 	apiURL := "http://" + listenAddress
 	args := append([]string{
-		fmt.Sprintf("--listen-address=%s", listenAddress),
-		fmt.Sprintf("--metrics-listen-address=%s", metricsListenAddress),
+		fmt.Sprintf("--api-listen=%s", listenAddress),
+		fmt.Sprintf("--metrics-listen=%s", metricsListenAddress),
 	}, addArgs...)
 
 	// Envs
@@ -356,8 +353,8 @@ func (t *Test) runAPIServer(
 	stdout := newCmdOut()
 	stderr := newCmdOut()
 	t.T().Cleanup(func() {
-		assert.NoError(t.t, t.workingDirFS.WriteFile(filesystem.NewRawFile("process-stdout.txt", stdout.String())))
-		assert.NoError(t.t, t.workingDirFS.WriteFile(filesystem.NewRawFile("process-stderr.txt", stderr.String())))
+		require.NoError(t.t, t.workingDirFS.WriteFile(t.ctx, filesystem.NewRawFile("process-stdout.txt", stdout.String())))
+		require.NoError(t.t, t.workingDirFS.WriteFile(t.ctx, filesystem.NewRawFile("process-stderr.txt", stderr.String())))
 	})
 
 	// Start API server
@@ -381,7 +378,7 @@ func (t *Test) runAPIServer(
 	})
 
 	// Wait for API server
-	if err = testhelper.WaitForAPI(t.ctx, cmdWaitCh, "api", apiURL, startupTimeout); err != nil {
+	if err := testhelper.WaitForAPI(t.ctx, cmdWaitCh, "api", apiURL, startupTimeout); err != nil {
 		t.t.Fatalf(
 			"Unexpected error while waiting for API: %s\n\nServer STDERR:%s\n\nServer STDOUT:%s\n",
 			err,
@@ -404,13 +401,13 @@ func (t *Test) runAPIServer(
 
 	// Check API server stdout/stderr
 	if requestsOk {
-		if t.testDirFS.IsFile(expectedStdoutPath) {
+		if t.testDirFS.IsFile(t.ctx, expectedStdoutPath) {
 			expected := t.ReadFileFromTestDir(expectedStdoutPath)
-			wildcards.Assert(t.t, expected, stdout.String(), "Unexpected STDOUT.")
+			log.AssertJSONMessages(t.t, expected, stdout.String(), "Unexpected STDOUT.")
 		}
-		if t.testDirFS.IsFile(expectedStderrPath) {
+		if t.testDirFS.IsFile(t.ctx, expectedStderrPath) {
 			expected := t.ReadFileFromTestDir(expectedStderrPath)
-			wildcards.Assert(t.t, expected, stderr.String(), "Unexpected STDERR.")
+			log.AssertJSONMessages(t.t, expected, stderr.String(), "Unexpected STDERR.")
 		}
 	}
 }
@@ -423,7 +420,7 @@ type APIRequest struct {
 type APIRequestDef struct {
 	Path    string            `json:"path" validate:"required"`
 	Method  string            `json:"method" validate:"required,oneof=DELETE GET PATCH POST PUT"`
-	Body    interface{}       `json:"body"`
+	Body    any               `json:"body"`
 	Headers map[string]string `json:"headers"`
 	Repeat  APIRequestRepeat  `json:"repeat,omitempty" validate:"omitempty"`
 }
@@ -442,25 +439,25 @@ func (t *Test) runRequests(apiURL string, requestDecoratorFn func(*APIRequestDef
 	t.apiClient.SetPreRequestHook(func(client *resty.Client, request *http.Request) error {
 		if dumpDir, ok := request.Context().Value(dumpDirCtxKey).(string); ok {
 			reqDump, err := httputil.DumpRequest(request, true)
-			assert.NoError(t.t, err)
-			assert.NoError(t.t, t.workingDirFS.WriteFile(filesystem.NewRawFile(filesystem.Join(dumpDir, "request.txt"), string(reqDump))))
+			require.NoError(t.t, err)
+			require.NoError(t.t, t.workingDirFS.WriteFile(t.ctx, filesystem.NewRawFile(filesystem.Join(dumpDir, "request.txt"), string(reqDump)))) // nolint: contextcheck
 		}
 		return nil
 	})
 
 	// Request folders should be named e.g. 001-request1, 002-request2
-	dirs, err := t.testDirFS.Glob("[0-9][0-9][0-9]-*")
+	dirs, err := t.testDirFS.Glob(t.ctx, "[0-9][0-9][0-9]-*")
 	requests := make(map[string]*APIRequest, 0)
 	for _, requestDir := range dirs {
 		// Read the request file
 		requestFileStr := t.ReadFileFromTestDir(filesystem.Join(requestDir, "request.json"))
-		assert.NoError(t.t, err)
+		require.NoError(t.t, err)
 
 		request := &APIRequestDef{}
 		err = json.DecodeString(requestFileStr, request)
-		assert.NoError(t.t, err)
+		require.NoError(t.t, err)
 		err = validator.New().Validate(context.Background(), request)
-		assert.NoError(t.t, err)
+		require.NoError(t.t, err)
 		requests[requestDir] = &APIRequest{Definition: *request}
 
 		// Send the request
@@ -477,7 +474,9 @@ func (t *Test) runRequests(apiURL string, requestDecoratorFn func(*APIRequestDef
 		r.SetHeaders(request.Headers)
 
 		// Decorate the request
-		requestDecoratorFn(request)
+		if requestDecoratorFn != nil {
+			requestDecoratorFn(request)
+		}
 
 		// Find and replace references to other requests in the request path
 		reqPath, err := processPathReference(request.Path, requests)
@@ -504,13 +503,13 @@ func (t *Test) runRequests(apiURL string, requestDecoratorFn func(*APIRequestDef
 			// Send request
 			r.SetContext(context.WithValue(r.Context(), dumpDirCtxKey, requestDir))
 			resp, err = r.Execute(request.Method, reqPath)
-			assert.NoError(t.t, err)
+			require.NoError(t.t, err)
 
 			// Dump raw HTTP response
 			if err == nil {
 				respDump, err := httputil.DumpResponse(resp.RawResponse, false)
-				assert.NoError(t.t, err)
-				assert.NoError(t.t, t.workingDirFS.WriteFile(filesystem.NewRawFile(filesystem.Join(requestDir, "response.txt"), string(respDump)+string(resp.Body()))))
+				require.NoError(t.t, err)
+				require.NoError(t.t, t.workingDirFS.WriteFile(t.ctx, filesystem.NewRawFile(filesystem.Join(requestDir, "response.txt"), string(respDump)+string(resp.Body()))))
 			}
 
 			// Get the response body
@@ -519,7 +518,7 @@ func (t *Test) runRequests(apiURL string, requestDecoratorFn func(*APIRequestDef
 				err = json.DecodeString(resp.String(), &respMap)
 			}
 			requests[requestDir].Response = respMap
-			assert.NoError(t.t, err, resp.String())
+			require.NoError(t.t, err, resp.String())
 
 			// Run only once if there is no repeat until condition
 			if request.Repeat.Until == "" {
@@ -542,7 +541,7 @@ func (t *Test) runRequests(apiURL string, requestDecoratorFn func(*APIRequestDef
 		}
 
 		respBody, err := json.EncodeString(respMap, true)
-		assert.NoError(t.t, err)
+		require.NoError(t.t, err)
 
 		// Compare response status code
 		expectedCode := cast.ToInt(t.ReadFileFromTestDir(filesystem.Join(requestDir, "expected-http-code")))
@@ -602,37 +601,38 @@ func processPathReference(path string, requests map[string]*APIRequest) (string,
 }
 
 func (t *Test) ReadFileFromTestDir(path string) string {
-	file, err := t.testDirFS.ReadFile(filesystem.NewFileDef(path))
-	assert.NoError(t.t, err)
+	file, err := t.testDirFS.ReadFile(t.ctx, filesystem.NewFileDef(path))
+	require.NoError(t.t, err)
 	return testhelper.MustReplaceEnvsString(strings.TrimSpace(file.Content), t.envProvider)
 }
 
 func (t *Test) assertDirContent() {
 	// Expected state dir
 	expectedDir := "out"
-	if !t.testDirFS.IsDir(expectedDir) {
+	if !t.testDirFS.IsDir(t.ctx, expectedDir) {
 		t.t.Fatalf(`Missing directory "%s" in "%s".`, expectedDir, t.testDirFS.BasePath())
 	}
 
 	// Copy expected state and replace ENVs
 	expectedDirFS := aferofs.NewMemoryFsFrom(filesystem.Join(t.testDirFS.BasePath(), expectedDir))
-	testhelper.MustReplaceEnvsDir(expectedDirFS, `/`, t.envProvider)
+	err := testhelper.ReplaceEnvsDir(t.ctx, expectedDirFS, `/`, t.envProvider)
+	require.NoError(t.t, err)
 
 	// Compare actual and expected dirs
 	testhelper.AssertDirectoryContentsSame(t.t, expectedDirFS, `/`, t.workingDirFS, `/`)
 }
 
 func (t *Test) assertProjectState() {
-	if t.testDirFS.IsFile(expectedStatePath) {
+	if t.testDirFS.IsFile(t.ctx, expectedStatePath) {
 		expectedState := t.ReadFileFromTestDir(expectedStatePath)
 
 		// Load actual state
 		actualState, err := t.project.NewSnapshot()
-		assert.NoError(t.t, err)
+		require.NoError(t.t, err)
 
 		// Write actual state
-		err = t.workingDirFS.WriteFile(filesystem.NewRawFile("actual-state.json", json.MustEncodeString(actualState, true)))
-		assert.NoError(t.t, err)
+		err = t.workingDirFS.WriteFile(t.ctx, filesystem.NewRawFile("actual-state.json", json.MustEncodeString(actualState, true)))
+		require.NoError(t.t, err)
 
 		// Compare expected and actual state
 		wildcards.Assert(

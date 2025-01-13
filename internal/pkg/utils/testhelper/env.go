@@ -3,6 +3,7 @@ package testhelper
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -55,27 +56,32 @@ func MustReplaceEnvsString(str string, provider EnvProvider) string {
 	return MustReplaceEnvsStringWithSeparator(str, provider, "%%")
 }
 
-// MustReplaceEnvsFileWithSeparator replaces ENVs in given file with chosen separator.
-func MustReplaceEnvsFileWithSeparator(fs filesystem.Fs, path string, provider EnvProvider, envSeparator string) {
-	file, err := fs.ReadFile(filesystem.NewFileDef(path))
+// ReplaceEnvsFileWithSeparator replaces ENVs in given file with chosen separator.
+func ReplaceEnvsFileWithSeparator(ctx context.Context, fs filesystem.Fs, path string, provider EnvProvider, envSeparator string) error {
+	file, err := fs.ReadFile(ctx, filesystem.NewFileDef(path))
 	if err != nil {
-		panic(err)
+		return err
 	}
-	file.Content = MustReplaceEnvsStringWithSeparator(file.Content, provider, envSeparator)
-	if err := fs.WriteFile(file); err != nil {
-		panic(errors.Errorf("cannot write to file \"%s\": %w", path, err))
+	file.Content, err = ReplaceEnvsStringWithSeparator(file.Content, provider, envSeparator)
+	if err != nil {
+		return err
 	}
+	if err := fs.WriteFile(ctx, file); err != nil {
+		err = errors.Errorf("cannot write to file \"%s\": %w", path, err)
+		return err
+	}
+	return nil
 }
 
-// MustReplaceEnvsFile replaces ENVs in given file.
-func MustReplaceEnvsFile(fs filesystem.Fs, path string, provider EnvProvider) {
-	MustReplaceEnvsFileWithSeparator(fs, path, provider, "%%")
+// ReplaceEnvsFile replaces ENVs in given file.
+func ReplaceEnvsFile(ctx context.Context, fs filesystem.Fs, path string, provider EnvProvider) error {
+	return ReplaceEnvsFileWithSeparator(ctx, fs, path, provider, "%%")
 }
 
-// MustReplaceEnvsDirWithSeparator replaces ENVs in all files in root directory and sub-directories with chosen separator.
-func MustReplaceEnvsDirWithSeparator(fs filesystem.Fs, root string, provider EnvProvider, envSeparator string) {
+// ReplaceEnvsDirWithSeparator replaces ENVs in all files in root directory and sub-directories with chosen separator.
+func ReplaceEnvsDirWithSeparator(ctx context.Context, fs filesystem.Fs, root string, provider EnvProvider, envSeparator string) error {
 	// Iterate over directory structure
-	err := fs.Walk(root, func(p string, info filesystem.FileInfo, err error) error {
+	err := fs.Walk(ctx, root, func(p string, info filesystem.FileInfo, err error) error {
 		// Stop on error
 		if err != nil {
 			return err
@@ -92,19 +98,17 @@ func MustReplaceEnvsDirWithSeparator(fs filesystem.Fs, root string, provider Env
 
 		// Process file
 		if !info.IsDir() {
-			MustReplaceEnvsFileWithSeparator(fs, p, provider, envSeparator)
+			err = ReplaceEnvsFileWithSeparator(ctx, fs, p, provider, envSeparator)
 		}
 
-		return nil
+		return err
 	})
-	if err != nil {
-		panic(errors.Errorf("cannot walk over dir \"%s\": %w", root, err))
-	}
+	return err
 }
 
-// MustReplaceEnvsDir replaces ENVs in all files in root directory and sub-directories.
-func MustReplaceEnvsDir(fs filesystem.Fs, root string, provider EnvProvider) {
-	MustReplaceEnvsDirWithSeparator(fs, root, provider, "%%")
+// ReplaceEnvsDir replaces ENVs in all files in root directory and sub-directories.
+func ReplaceEnvsDir(ctx context.Context, fs filesystem.Fs, root string, provider EnvProvider) error {
+	return ReplaceEnvsDirWithSeparator(ctx, fs, root, provider, "%%")
 }
 
 // stripAnsiWriter strips ANSI characters from
@@ -166,10 +170,19 @@ func (n *nopCloser) Close() error {
 	return nil
 }
 
+// CreateOutDir returns true if writing of various dump files to ".out" directories is enabled.
+func CreateOutDir() bool {
+	value := os.Getenv("TEST_CREATE_OUT_DIR")
+	if value == "" {
+		return true
+	}
+	return cast.ToBool(value)
+}
+
 func TestIsVerbose() bool {
 	value := os.Getenv("TEST_VERBOSE")
 	if value == "" {
-		value = "false"
+		return false
 	}
 	return cast.ToBool(value)
 }

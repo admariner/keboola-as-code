@@ -2,6 +2,7 @@ package persist
 
 import (
 	"context"
+	"io"
 
 	"github.com/keboola/go-client/pkg/keboola"
 
@@ -20,9 +21,10 @@ type Options struct {
 }
 
 type dependencies interface {
-	KeboolaProjectAPI() *keboola.API
+	KeboolaProjectAPI() *keboola.AuthorizedAPI
 	Logger() log.Logger
 	Telemetry() telemetry.Telemetry
+	Stdout() io.Writer
 }
 
 func Run(ctx context.Context, projectState *project.State, o Options, d dependencies) (err error) {
@@ -35,18 +37,18 @@ func Run(ctx context.Context, projectState *project.State, o Options, d dependen
 	api := d.KeboolaProjectAPI()
 
 	// Get plan
-	plan, err := persist.NewPlan(projectState.State())
+	plan, err := persist.NewPlan(ctx, projectState.State())
 	if err != nil {
 		return err
 	}
 
 	// Log plan
-	plan.Log(logger)
+	plan.Log(d.Stdout())
 
 	if !plan.Empty() {
 		// Dry run?
 		if o.DryRun {
-			logger.Info("Dry run, nothing changed.")
+			logger.Info(ctx, "Dry run, nothing changed.")
 			return nil
 		}
 
@@ -63,7 +65,7 @@ func Run(ctx context.Context, projectState *project.State, o Options, d dependen
 
 	// Print remaining untracked paths
 	if o.LogUntrackedPaths {
-		projectState.LogUntrackedPaths(logger)
+		projectState.LogUntrackedPaths(ctx, logger)
 	}
 
 	// Normalize paths
@@ -71,6 +73,6 @@ func Run(ctx context.Context, projectState *project.State, o Options, d dependen
 		return err
 	}
 
-	logger.Info(`Persist done.`)
+	logger.Info(ctx, `Persist done.`)
 	return nil
 }

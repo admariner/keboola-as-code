@@ -1,10 +1,12 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	. "github.com/keboola/keboola-as-code/internal/pkg/service/templates/api/gen/templates"
 	"github.com/keboola/keboola-as-code/internal/pkg/template"
@@ -322,13 +324,13 @@ func TestValidateInputs(t *testing.T) {
 	// Test
 	for i, c := range cases {
 		desc := fmt.Sprintf("Case %d - %s", i+1, c.name)
-		result, values, err := validateInputs(c.groups, c.payload)
+		result, values, err := validateInputs(context.Background(), c.groups, c.payload)
 		if c.err == "" {
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			assert.Equal(t, c.result, result, desc)
 			assert.Equal(t, c.values, values, desc)
 		} else {
-			assert.Error(t, err)
+			require.Error(t, err)
 			assert.Equal(t, c.err, err.Error(), desc)
 		}
 	}

@@ -2,10 +2,16 @@ package pull
 
 import (
 	"context"
+	"io"
 
+	"github.com/keboola/go-client/pkg/keboola"
+
+	"github.com/keboola/keboola-as-code/internal/pkg/diff"
 	"github.com/keboola/keboola-as-code/internal/pkg/log"
 	"github.com/keboola/keboola-as-code/internal/pkg/plan/pull"
 	"github.com/keboola/keboola-as-code/internal/pkg/project"
+	"github.com/keboola/keboola-as-code/internal/pkg/project/cachefile"
+	"github.com/keboola/keboola-as-code/internal/pkg/project/ignore"
 	"github.com/keboola/keboola-as-code/internal/pkg/telemetry"
 	"github.com/keboola/keboola-as-code/internal/pkg/utils/errors"
 	saveManifest "github.com/keboola/keboola-as-code/pkg/lib/operation/project/local/manifest/save"
@@ -23,6 +29,10 @@ type Options struct {
 type dependencies interface {
 	Logger() log.Logger
 	Telemetry() telemetry.Telemetry
+	Stdout() io.Writer
+	ProjectBackends() []string
+	ProjectFeatures() keboola.FeaturesMap
+	KeboolaProjectAPI() *keboola.AuthorizedAPI
 }
 
 func LoadStateOptions(force bool) loadState.Options {
@@ -40,8 +50,22 @@ func Run(ctx context.Context, projectState *project.State, o Options, d dependen
 
 	logger := d.Logger()
 
+	if projectState.Fs().Exists(ctx, ignore.KBCIgnoreFilePath) {
+		// Load ignore file
+		file, err := ignore.LoadFile(ctx, projectState.Fs(), projectState.Registry, ignore.KBCIgnoreFilePath)
+		if err != nil {
+			return err
+		}
+
+		if err = file.IgnoreConfigsOrRows(); err != nil {
+			return err
+		}
+
+		ignoreConfigsAndRows(projectState)
+	}
+
 	// Diff
-	results, err := createDiff.Run(ctx, createDiff.Options{Objects: projectState}, d)
+	results, err := createDiff.Run(ctx, createDiff.Options{Objects: projectState}, d, diff.WithIgnoreBranchName(projectState.ProjectManifest().AllowTargetENV()))
 	if err != nil {
 		return err
 	}
@@ -52,23 +76,34 @@ func Run(ctx context.Context, projectState *project.State, o Options, d dependen
 		return err
 	}
 
+	// Get default branch
+	defaultBranch, err := d.KeboolaProjectAPI().GetDefaultBranchRequest().Send(ctx)
+	if err != nil {
+		return err
+	}
+
 	// Log plan
-	plan.Log(logger)
+	plan.Log(d.Stdout())
 
 	if !plan.Empty() {
 		// Dry run?
 		if o.DryRun {
-			logger.Info("Dry run, nothing changed.")
+			logger.Info(ctx, "Dry run, nothing changed.")
 			return nil
 		}
 
 		// Invoke
-		if err := plan.Invoke(logger, projectState.Ctx(), projectState.LocalManager(), projectState.RemoteManager(), ``); err != nil {
+		if err := plan.Invoke(logger, projectState.Ctx(), projectState.LocalManager(), projectState.RemoteManager(), ``); err != nil { // nolint: contextcheck
 			return err
 		}
 
 		// Save manifest
 		if _, err := saveManifest.Run(ctx, projectState.ProjectManifest(), projectState.Fs(), d); err != nil {
+			return err
+		}
+
+		// Save project.json
+		if err := cachefile.New().Save(ctx, projectState.Fs(), d.ProjectBackends(), d.ProjectFeatures(), defaultBranch.ID); err != nil {
 			return err
 		}
 
@@ -79,22 +114,32 @@ func Run(ctx context.Context, projectState *project.State, o Options, d dependen
 
 		// Validate schemas and encryption
 		if err := validate.Run(ctx, projectState, validate.Options{ValidateSecrets: true, ValidateJSONSchema: true}, d); err != nil {
-			logger.Warn(errors.Format(errors.PrefixError(err, "warning"), errors.FormatAsSentences()))
-			logger.Warn()
-			logger.Warnf(`The project has been pulled, but it is not in a valid state.`)
-			logger.Warnf(`Please correct the problems listed above.`)
-			logger.Warnf(`Push operation is only possible when project is valid.`)
+			logger.Warn(ctx, errors.Format(errors.PrefixError(err, "warning"), errors.FormatAsSentences()))
+			logger.Warn(ctx, "")
+			logger.Warn(ctx, `The project has been pulled, but it is not in a valid state.`)
+			logger.Warn(ctx, `Please correct the problems listed above.`)
+			logger.Warn(ctx, `Push operation is only possible when project is valid.`)
 		}
 	}
 
 	// Log untracked paths
 	if o.LogUntrackedPaths {
-		projectState.LogUntrackedPaths(logger)
+		projectState.LogUntrackedPaths(ctx, logger)
 	}
 
 	if !plan.Empty() {
-		logger.Info("Pull done.")
+		logger.Info(ctx, "Pull done.")
 	}
 
 	return nil
+}
+
+func ignoreConfigsAndRows(projectState *project.State) {
+	for _, v := range projectState.IgnoredConfigRows() {
+		v.SetRemoteState(nil)
+	}
+
+	for _, v := range projectState.IgnoredConfigs() {
+		v.SetRemoteState(nil)
+	}
 }

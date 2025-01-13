@@ -15,8 +15,11 @@
 # Test binary, build with `go test -c`
 *.test
 
-# Output of the go coverage tool, specifically when used with LiteIDE
+# Output of tests
+coverage.html
+benchmark.txt
 *.out
+.actual
 
 # IDE
 /.idea
@@ -25,10 +28,11 @@
 vendor/*
 
 # Build dir
-target
+/target
 
 # Environment
 /.env
+/projects.json
 /scripts/k6/.env
 
 # Integration tests output
@@ -46,3 +50,7 @@ target
 
 # CPU profiles
 /**/*.prof
+
+# Certificates
+/ca
+/certs

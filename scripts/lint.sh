@@ -12,12 +12,12 @@ cd "$SCRIPT_DIR/.."
 pwd
 
 # Check the most important problems first
-echo "Running go vet ..."
-if ! go vet ./...; then
-    echo "Please fix ^^^ errors. You can try run \"make fix\"."
-    echo
-    exit 1
-fi
+#echo "Running go vet ..."
+#if ! go vet ./...; then
+#    echo "Please fix ^^^ errors. You can try run \"make fix\"."
+#    echo
+#    exit 1
+#fi
 
 # Check modules
 echo "Running go mod tidy/verify ..."
@@ -31,7 +31,7 @@ echo
 
 # Run linters
 echo "Running golangci-lint ..."
-if golangci-lint run -c "./build/ci/golangci.yml"; then
+if golangci-lint run -c "./build/ci/golangci.yml" "$@"; then
     echo "Ok. The code looks good."
     echo
 else

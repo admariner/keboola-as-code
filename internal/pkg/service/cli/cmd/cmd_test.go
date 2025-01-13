@@ -1,11 +1,13 @@
 package cmd
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/keboola/go-utils/pkg/wildcards"
 	"github.com/spf13/pflag"
 	"github.com/stretchr/testify/assert"
 
@@ -46,8 +48,9 @@ func TestCliSubCommandsAndAliases(t *testing.T) {
 	root, _ := newTestRootCommand(aferofs.NewMemoryFs())
 
 	// Map commands to names
-	var names []string
-	for _, cmd := range root.Commands() {
+	cmds := root.Commands()
+	names := make([]string, 0, len(cmds))
+	for _, cmd := range cmds {
 		names = append(names, cmd.Name())
 	}
 
@@ -98,8 +101,8 @@ func TestCliCmdPersistentFlags(t *testing.T) {
 	expected := []string{
 		"help",
 		"log-file",
+		"log-format",
 		"non-interactive",
-		"storage-api-token",
 		"verbose",
 		"verbose-api",
 		"version-check",
@@ -118,6 +121,23 @@ func TestCliCmdFlags(t *testing.T) {
 		names = append(names, flag.Name)
 	})
 
+	var persistentFlags []string
+	root.PersistentFlags().VisitAll(func(flag *pflag.Flag) {
+		persistentFlags = append(persistentFlags, flag.Name)
+	})
+
+	persistentExpected := []string{
+		"help",
+		"log-file",
+		"log-format",
+		"non-interactive",
+		"verbose",
+		"verbose-api",
+		"version-check",
+		"working-dir",
+	}
+
+	assert.Equal(t, persistentExpected, persistentFlags)
 	// Assert
 	expected := []string{
 		"version",
@@ -139,7 +159,7 @@ func TestTearDown_RemoveLogFile(t *testing.T) {
 	t.Parallel()
 	root, _ := newTestRootCommand(aferofs.NewMemoryFs())
 
-	root.options.LogFilePath = ""
+	root.globalFlags.LogFile.Value = ""
 	root.setupLogger()
 	assert.True(t, root.logFile.IsTemp())
 
@@ -153,14 +173,14 @@ func TestTearDown_KeepLogFile(t *testing.T) {
 	root, _ := newTestRootCommand(aferofs.NewMemoryFs())
 	tempDir := t.TempDir()
 
-	root.options.LogFilePath = filepath.Join(tempDir, "log-file.txt") // nolint: forbidigo
+	root.globalFlags.LogFile.Value = filepath.Join(tempDir, "log-file.txt") // nolint: forbidigo
 	root.setupLogger()
 	assert.False(t, root.logFile.IsTemp())
-	assert.Equal(t, root.logFile.Path(), root.options.LogFilePath)
+	assert.Equal(t, root.logFile.Path(), root.globalFlags.LogFile.Value)
 
-	assert.FileExists(t, root.options.LogFilePath)
+	assert.FileExists(t, root.globalFlags.LogFile.Value)
 	root.tearDown(0, nil)
-	assert.FileExists(t, root.options.LogFilePath)
+	assert.FileExists(t, root.globalFlags.LogFile.Value)
 }
 
 func TestTearDown_Panic(t *testing.T) {
@@ -170,7 +190,10 @@ func TestTearDown_Panic(t *testing.T) {
 	root.logger = logger
 	exitCode := root.tearDown(0, errors.New("panic error"))
 	assert.Equal(t, 1, exitCode)
-	expected := `INFO  
+	expected := `
+DEBUG  Unexpected panic: panic error
+%A
+INFO  
 ---------------------------------------------------
 Keboola CLI had a problem and crashed.
 
@@ -184,13 +207,13 @@ We take privacy seriously, and do not perform any automated log file collection.
 
 Thank you kindly!
 `
-	assert.Equal(t, expected, logger.InfoMessages())
+	wildcards.Assert(t, expected, logger.AllMessagesTxt())
 }
 
 func TestGetLogFileTempFile(t *testing.T) {
 	t.Parallel()
 	root, _ := newTestRootCommand(aferofs.NewMemoryFs())
-	root.options.LogFilePath = ""
+	root.globalFlags.LogFile.Value = ""
 	root.setupLogger()
 	assert.True(t, root.logFile.IsTemp())
 
@@ -208,9 +231,8 @@ func TestGetLogFileFromFlags(t *testing.T) {
 
 	// Note: log file can be outside project directory, so it is NOT using virtual filesystem
 	tempDir := t.TempDir()
-	root.options.LogFilePath = filesystem.Join(tempDir, "log-file.txt")
+	root.globalFlags.LogFile.Value = filesystem.Join(tempDir, "log-file.txt")
 	root.setupLogger()
-	assert.Equal(t, root.options.LogFilePath, root.options.LogFilePath)
 	assert.False(t, root.logFile.IsTemp())
 	assert.NoError(t, root.logFile.File().Close())
 }
@@ -218,11 +240,16 @@ func TestGetLogFileFromFlags(t *testing.T) {
 func newTestRootCommand(fs filesystem.Fs) (*RootCommand, *ioutil.AtomicWriter) {
 	in := ioutil.NewBufferedReader()
 	out := ioutil.NewAtomicWriter()
-	fsFactory := func(opts ...filesystem.Option) (filesystem.Fs, error) {
+	fsFactory := func(_ context.Context, opts ...filesystem.Option) (filesystem.Fs, error) {
 		return fs, nil
 	}
 
 	envs := env.Empty()
 
-	return NewRootCommand(in, out, out, envs, fsFactory), out
+	root := NewRootCommand(in, out, out, envs, fsFactory)
+	if root.Context() == nil {
+		root.SetContext(context.Background())
+	}
+
+	return root, out
 }

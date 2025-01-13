@@ -3,6 +3,7 @@ package persist
 import (
 	"context"
 	"fmt"
+	"io"
 
 	"github.com/keboola/go-client/pkg/keboola"
 
@@ -22,18 +23,18 @@ func (p *Plan) Name() string {
 	return "persist"
 }
 
-func (p *Plan) Log(logger log.Logger) {
-	writer := logger.InfoWriter()
-	writer.WriteString(fmt.Sprintf(`Plan for "%s" operation:`, p.Name()))
+func (p *Plan) Log(w io.Writer) {
+	fmt.Fprintf(w, `Plan for "%s" operation:`, p.Name())
+	fmt.Fprintln(w)
 	if len(p.actions) == 0 {
-		writer.WriteStringIndent(1, "no new or deleted objects found")
+		fmt.Fprintln(w, "  no new or deleted objects found")
 	} else {
 		for _, action := range p.actions {
-			writer.WriteStringIndent(1, action.String())
+			fmt.Fprintln(w, "  "+action.String())
 		}
 	}
 }
 
-func (p *Plan) Invoke(ctx context.Context, logger log.Logger, keboolaProjectAPI *keboola.API, projectState *state.State) error {
+func (p *Plan) Invoke(ctx context.Context, logger log.Logger, keboolaProjectAPI *keboola.AuthorizedAPI, projectState *state.State) error {
 	return newExecutor(ctx, logger, keboolaProjectAPI, projectState, p).invoke()
 }

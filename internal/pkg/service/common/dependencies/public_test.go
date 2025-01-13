@@ -2,10 +2,12 @@ package dependencies
 
 import (
 	"context"
+	"os"
 	"testing"
 
-	"github.com/benbjohnson/clock"
+	"github.com/jonboulle/clockwork"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/log"
 	"github.com/keboola/keboola-as-code/internal/pkg/service/common/httpclient"
@@ -17,11 +19,11 @@ func TestNewPublicDeps_LazyLoadComponents(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	httpClient := httpclient.New()
-	baseDeps := newBaseScope(ctx, log.NewNopLogger(), telemetry.NewNop(), clock.New(), servicectx.NewForTest(t, ctx), httpClient)
+	baseDeps := newBaseScope(ctx, log.NewNopLogger(), telemetry.NewNop(), os.Stdout, os.Stderr, clockwork.NewRealClock(), servicectx.NewForTest(t), httpClient)
 
 	// Create public deps without loading components.
 	deps, err := newPublicScope(context.Background(), baseDeps, "https://connection.keboola.com")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Check the components are loaded lazily.
 	c, found := deps.Components().Get("keboola.ex-currency")

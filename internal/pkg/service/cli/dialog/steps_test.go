@@ -1,10 +1,12 @@
 package dialog
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	nopPrompt "github.com/keboola/keboola-as-code/internal/pkg/service/cli/prompt/nop"
 	"github.com/keboola/keboola-as-code/internal/pkg/template/input"
@@ -59,8 +61,8 @@ icon: common:settings
 
 	// Parse
 	d := newStepsDialog(nopPrompt.New())
-	stepsGroups, err := d.parse(in)
-	assert.NoError(t, err)
+	stepsGroups, err := d.parse(context.Background(), in)
+	require.NoError(t, err)
 	assert.Equal(t, expectedGroups, stepsGroups)
 }
 
@@ -118,8 +120,8 @@ description: Description
 
 	// Parse
 	d := newStepsDialog(nopPrompt.New())
-	_, err := d.parse(in)
-	assert.Error(t, err)
+	_, err := d.parse(context.Background(), in)
+	require.Error(t, err)
 	assert.Equal(t, strings.Trim(expected, "\n"), err.Error())
 }
 
@@ -135,7 +137,7 @@ at least one steps group must be defined
 
 	// Parse
 	d := newStepsDialog(nopPrompt.New())
-	_, err := d.parse(in)
-	assert.Error(t, err)
+	_, err := d.parse(context.Background(), in)
+	require.Error(t, err)
 	assert.Equal(t, strings.Trim(expected, "\n"), err.Error())
 }

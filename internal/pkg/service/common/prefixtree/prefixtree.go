@@ -21,6 +21,7 @@ type TreeReadOnly[T any] interface {
 	AllFromPrefix(key string) []T
 	FirstFromPrefix(key string) (value T, found bool)
 	LastFromPrefix(key string) (value T, found bool)
+	WalkAll(fn func(key string, value T) (stop bool))
 	WalkPrefix(key string, fn func(key string, value T) (stop bool))
 	ToMap() map[string]T
 }
@@ -48,6 +49,12 @@ func (t *AtomicTree[T]) AtomicReadOnly(do func(t TreeReadOnly[T])) {
 	t.lock.RLock()
 	defer t.lock.RUnlock()
 	do(t.tree)
+}
+
+func (t *AtomicTree[T]) Len() int {
+	t.lock.RLock()
+	defer t.lock.RUnlock()
+	return t.tree.Len()
 }
 
 func (t *AtomicTree[T]) All() []T {
@@ -122,6 +129,10 @@ func (t *AtomicTree[T]) DeletePrefix(key string) {
 	t.tree.DeletePrefix(key)
 }
 
+func (t *Tree[T]) Len() int {
+	return t.tree.Len()
+}
+
 func (t *Tree[T]) All() []T {
 	var out []T
 	t.WalkAll(func(_ string, value T) bool {
@@ -189,13 +200,13 @@ func (t *Tree[T]) Reset() {
 }
 
 func (t *Tree[T]) WalkPrefix(key string, fn func(key string, value T) (stop bool)) {
-	t.tree.WalkPrefix(key, func(key string, value interface{}) bool {
+	t.tree.WalkPrefix(key, func(key string, value any) bool {
 		return fn(key, value.(T))
 	})
 }
 
 func (t *Tree[T]) WalkAll(fn func(key string, value T) (stop bool)) {
-	t.tree.WalkPrefix("", func(key string, value interface{}) bool {
+	t.tree.WalkPrefix("", func(key string, value any) bool {
 		return fn(key, value.(T))
 	})
 }

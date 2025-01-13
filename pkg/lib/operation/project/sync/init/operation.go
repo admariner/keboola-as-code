@@ -2,6 +2,7 @@ package init
 
 import (
 	"context"
+	"io"
 
 	"github.com/keboola/go-client/pkg/keboola"
 
@@ -9,10 +10,8 @@ import (
 	"github.com/keboola/keboola-as-code/internal/pkg/log"
 	"github.com/keboola/keboola-as-code/internal/pkg/model"
 	"github.com/keboola/keboola-as-code/internal/pkg/project"
-	"github.com/keboola/keboola-as-code/internal/pkg/service/cli/options"
 	"github.com/keboola/keboola-as-code/internal/pkg/telemetry"
 	"github.com/keboola/keboola-as-code/internal/pkg/utils/errors"
-	createEnvFiles "github.com/keboola/keboola-as-code/pkg/lib/operation/project/local/envfiles/create"
 	createManifest "github.com/keboola/keboola-as-code/pkg/lib/operation/project/local/manifest/create"
 	createMetaDir "github.com/keboola/keboola-as-code/pkg/lib/operation/project/local/metadir/create"
 	genWorkflows "github.com/keboola/keboola-as-code/pkg/lib/operation/project/local/workflows/generate"
@@ -28,14 +27,16 @@ type Options struct {
 
 type dependencies interface {
 	Components() *model.ComponentsMap
-	EmptyDir() (filesystem.Fs, error)
-	KeboolaProjectAPI() *keboola.API
+	EmptyDir(ctx context.Context) (filesystem.Fs, error)
+	KeboolaProjectAPI() *keboola.AuthorizedAPI
 	Logger() log.Logger
-	Options() *options.Options
 	ProjectID() keboola.ProjectID
 	StorageAPIHost() string
 	StorageAPIToken() keboola.Token
 	Telemetry() telemetry.Telemetry
+	Stdout() io.Writer
+	ProjectBackends() []string
+	ProjectFeatures() keboola.FeaturesMap
 }
 
 func Run(ctx context.Context, o Options, d dependencies) (err error) {
@@ -44,7 +45,7 @@ func Run(ctx context.Context, o Options, d dependencies) (err error) {
 
 	logger := d.Logger()
 
-	fs, err := d.EmptyDir()
+	fs, err := d.EmptyDir(ctx)
 	if err != nil {
 		return err
 	}
@@ -60,11 +61,6 @@ func Run(ctx context.Context, o Options, d dependencies) (err error) {
 		return errors.Errorf(`cannot create manifest: %w`, err)
 	}
 
-	// Create ENV files
-	if err := createEnvFiles.Run(ctx, fs, d); err != nil {
-		return err
-	}
-
 	// Related operations
 	errs := errors.NewMultiError()
 
@@ -73,12 +69,12 @@ func Run(ctx context.Context, o Options, d dependencies) (err error) {
 		errs.AppendWithPrefix(err, "workflows generation failed")
 	}
 
-	logger.Info("Init done.")
+	logger.Info(ctx, "Init done.")
 
 	// First pull
 	if o.Pull {
-		logger.Info()
-		logger.Info(`Running pull.`)
+		logger.Info(ctx, "")
+		logger.Info(ctx, `Running pull.`)
 
 		// Load project state
 		prj := project.NewWithManifest(ctx, fs, manifest)

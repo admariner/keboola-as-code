@@ -1,9 +1,11 @@
 package input
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type validationTestCase struct {
@@ -193,7 +195,7 @@ func TestValidationRules(t *testing.T) {
 					Description: "input desc",
 					Type:        "string[]",
 					Kind:        "multiselect",
-					Default:     []interface{}{"a", "d"},
+					Default:     []any{"a", "d"},
 					Options: Options{
 						{Value: "a", Label: "A"},
 						{Value: "b", Label: "B"},
@@ -212,7 +214,7 @@ func TestValidationRules(t *testing.T) {
 					Description: "input desc",
 					Type:        "string[]",
 					Kind:        "multiselect",
-					Default:     []interface{}{"a", "c"},
+					Default:     []any{"a", "c"},
 					Options: Options{
 						{Value: "a", Label: "A"},
 						{Value: "b", Label: "B"},
@@ -331,12 +333,12 @@ func TestValidationRules(t *testing.T) {
 	// Test all cases
 	for _, c := range cases {
 		stepsGroups[0].Steps[0].Inputs = c.inputs
-		err := stepsGroups.ValidateDefinitions()
+		err := stepsGroups.ValidateDefinitions(context.Background())
 		if c.error == "" {
 			// Expected nil errors.MultiError
-			assert.Nil(t, err, c.description)
+			require.NoError(t, err)
 		} else {
-			assert.Error(t, err, c.description)
+			require.Error(t, err, c.description)
 			assert.Equal(t, c.error, err.Error(), c.description)
 		}
 	}

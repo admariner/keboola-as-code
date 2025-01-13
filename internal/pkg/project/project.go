@@ -5,6 +5,7 @@ import (
 
 	"github.com/keboola/go-client/pkg/keboola"
 
+	"github.com/keboola/keboola-as-code/internal/pkg/env"
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem"
 	"github.com/keboola/keboola-as-code/internal/pkg/log"
 	"github.com/keboola/keboola-as-code/internal/pkg/mapper"
@@ -16,6 +17,11 @@ import (
 	loadState "github.com/keboola/keboola-as-code/pkg/lib/operation/state/load"
 )
 
+const (
+	BackendSnowflake = "snowflake"
+	BackendBigQuery  = "bigquery"
+)
+
 type Manifest = projectManifest.Manifest
 
 type InvalidManifestError = projectManifest.InvalidManifestError
@@ -24,13 +30,13 @@ func NewManifest(projectID keboola.ProjectID, apiHost string) *Manifest {
 	return projectManifest.New(projectID, apiHost)
 }
 
-func LoadManifest(fs filesystem.Fs, ignoreErrors bool) (*Manifest, error) {
-	return projectManifest.Load(fs, ignoreErrors)
+func LoadManifest(ctx context.Context, logger log.Logger, fs filesystem.Fs, envs env.Provider, ignoreErrors bool) (*Manifest, error) {
+	return projectManifest.Load(ctx, logger, fs, envs, ignoreErrors)
 }
 
 type dependencies interface {
 	Components() *model.ComponentsMap
-	KeboolaProjectAPI() *keboola.API
+	KeboolaProjectAPI() *keboola.AuthorizedAPI
 	Logger() log.Logger
 	Telemetry() telemetry.Telemetry
 }
@@ -43,8 +49,8 @@ type Project struct {
 	manifest   *Manifest
 }
 
-func New(ctx context.Context, fs filesystem.Fs, ignoreErrors bool) (*Project, error) {
-	m, err := projectManifest.Load(fs, ignoreErrors)
+func New(ctx context.Context, logger log.Logger, fs filesystem.Fs, envs env.Provider, ignoreErrors bool) (*Project, error) {
+	m, err := projectManifest.Load(ctx, logger, fs, envs, ignoreErrors)
 	if err != nil {
 		return nil, err
 	}

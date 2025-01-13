@@ -11,29 +11,30 @@ import (
 	"github.com/google/go-jsonnet"
 	"github.com/google/go-jsonnet/ast"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestVmContext_Nil(t *testing.T) {
 	t.Parallel()
 	output, err := Evaluate(`{foo: "bar"}`, nil)
-	assert.NoError(t, err)
-	assert.Equal(t, "{\n  \"foo\": \"bar\"\n}\n", output)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"foo":"bar"}`, output)
 }
 
 func TestVmContext_Empty(t *testing.T) {
 	t.Parallel()
 	ctx := NewContext()
 	output, err := Evaluate(`{foo: "bar"}`, ctx)
-	assert.NoError(t, err)
-	assert.Equal(t, "{\n  \"foo\": \"bar\"\n}\n", output)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"foo":"bar"}`, output)
 }
 
 func TestVmContext_Pretty_False(t *testing.T) {
 	t.Parallel()
 	ctx := NewContext().WithPretty(false)
 	output, err := Evaluate(`{foo: "bar"}`, ctx)
-	assert.NoError(t, err)
-	assert.Equal(t, `{"foo":"bar"}`, output)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"foo":"bar"}`, output)
 }
 
 func TestVmContext_Complex(t *testing.T) {
@@ -44,14 +45,14 @@ func TestVmContext_Complex(t *testing.T) {
 	ctx.NativeFunction(&jsonnet.NativeFunction{
 		Name:   `func1`,
 		Params: ast.Identifiers{"param1", "param2"},
-		Func: func(params []interface{}) (interface{}, error) {
+		Func: func(params []any) (any, error) {
 			return fmt.Sprintf("---%s---%s---", params[0], params[1]), nil
 		},
 	})
 	ctx.NativeFunctionWithAlias(&jsonnet.NativeFunction{
 		Name:   `func2`,
 		Params: ast.Identifiers{"param1", "param2"},
-		Func: func(params []interface{}) (interface{}, error) {
+		Func: func(params []any) (any, error) {
 			return fmt.Sprintf("***%s***%s***", params[0], params[1]), nil
 		},
 	})
@@ -87,7 +88,7 @@ func TestVmContext_Complex(t *testing.T) {
 `
 
 	output, err := Evaluate(code, ctx)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, strings.TrimLeft(expected, "\n"), output)
 }
 
@@ -121,7 +122,7 @@ func TestVmContext_VariablesTypes(t *testing.T) {
 `
 
 	output, err := Evaluate(code, ctx)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, strings.TrimLeft(expected, "\n"), output)
 }
 
@@ -136,11 +137,11 @@ func TestVmContext_ValueToLiteral_MapArray(t *testing.T) {
 	ctx.registerTo(vm)
 
 	jsonContent, err := vm.Evaluate(result)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	var evaluatedResult bytes.Buffer
 	err = json.Indent(&evaluatedResult, []byte(jsonContent), "", "  ")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	expected := `{
   "five": [
@@ -171,7 +172,7 @@ func TestVmContext_Notifier(t *testing.T) {
 	ctx.NativeFunction(&NativeFunction{
 		Name:   `decorate`,
 		Params: ast.Identifiers{"str"},
-		Func: func(params []interface{}) (interface{}, error) {
+		Func: func(params []any) (any, error) {
 			return fmt.Sprintf("~%s~", params[0].(string)), nil
 		},
 	})
@@ -180,8 +181,8 @@ func TestVmContext_Notifier(t *testing.T) {
 	ctx.NativeFunction(&NativeFunction{
 		Name:   `keyValueObject`,
 		Params: ast.Identifiers{"key", "value"},
-		Func: func(params []interface{}) (interface{}, error) {
-			return map[string]interface{}{params[0].(string): params[1].(string)}, nil
+		Func: func(params []any) (any, error) {
+			return map[string]any{params[0].(string): params[1].(string)}, nil
 		},
 	})
 
@@ -239,15 +240,15 @@ Do()
 		// Objects merging
 		{
 			fnName:  "keyValueObject",
-			args:    []interface{}{"C", "CCC"},
+			args:    []any{"C", "CCC"},
 			partial: false,
-			partialValue: map[string]interface{}{
+			partialValue: map[string]any{
 				"C": "CCC",
 			},
-			finalValue: map[string]interface{}{
+			finalValue: map[string]any{
 				"C": "CCC",
 			},
-			steps: []interface{}{
+			steps: []any{
 				jsonnet.ObjectFieldStep{Field: "myObject"},
 				jsonnet.ObjectFieldStep{Field: "mergedObject"},
 				jsonnet.ObjectFieldStep{Field: "sub"},
@@ -255,38 +256,38 @@ Do()
 		},
 		{
 			fnName:  "keyValueObject",
-			args:    []interface{}{"A", "AAA"},
+			args:    []any{"A", "AAA"},
 			partial: true,
-			partialValue: map[string]interface{}{
+			partialValue: map[string]any{
 				"A": "AAA",
 			},
-			finalValue: map[string]interface{}{
+			finalValue: map[string]any{
 				"A": "AAA",
 				"B": "BBB",
-				"sub": map[string]interface{}{
+				"sub": map[string]any{
 					"C": "CCC",
 				},
 			},
-			steps: []interface{}{
+			steps: []any{
 				jsonnet.ObjectFieldStep{Field: "myObject"},
 				jsonnet.ObjectFieldStep{Field: "mergedObject"},
 			},
 		},
 		{
 			fnName:  "keyValueObject",
-			args:    []interface{}{"B", "BBB"},
+			args:    []any{"B", "BBB"},
 			partial: true,
-			partialValue: map[string]interface{}{
+			partialValue: map[string]any{
 				"B": "BBB",
 			},
-			finalValue: map[string]interface{}{
+			finalValue: map[string]any{
 				"A": "AAA",
 				"B": "BBB",
-				"sub": map[string]interface{}{
+				"sub": map[string]any{
 					"C": "CCC",
 				},
 			},
-			steps: []interface{}{
+			steps: []any{
 				jsonnet.ObjectFieldStep{Field: "myObject"},
 				jsonnet.ObjectFieldStep{Field: "mergedObject"},
 			},
@@ -294,11 +295,11 @@ Do()
 		// Simple usage
 		{
 			fnName:       "decorate",
-			args:         []interface{}{"Foo"},
+			args:         []any{"Foo"},
 			partial:      false,
 			partialValue: "~Foo~",
 			finalValue:   "~Foo~",
-			steps: []interface{}{
+			steps: []any{
 				jsonnet.ObjectFieldStep{Field: "other"},
 				jsonnet.ArrayIndexStep{Index: 0},
 				jsonnet.ObjectFieldStep{Field: "name"},
@@ -306,11 +307,11 @@ Do()
 		},
 		{
 			fnName:       "decorate",
-			args:         []interface{}{"Bar"},
+			args:         []any{"Bar"},
 			partial:      false,
 			partialValue: "~Bar~",
 			finalValue:   "~Bar~",
-			steps: []interface{}{
+			steps: []any{
 				jsonnet.ObjectFieldStep{Field: "other"},
 				jsonnet.ArrayIndexStep{Index: 1},
 				jsonnet.ObjectFieldStep{Field: "name"},
@@ -318,22 +319,22 @@ Do()
 		},
 		{
 			fnName:       "decorate",
-			args:         []interface{}{"Alice"},
+			args:         []any{"Alice"},
 			partial:      false,
 			partialValue: "~Alice~",
 			finalValue:   "~Alice~",
-			steps: []interface{}{
+			steps: []any{
 				jsonnet.ObjectFieldStep{Field: "person1"},
 				jsonnet.ObjectFieldStep{Field: "name"},
 			},
 		},
 		{
 			fnName:       "decorate",
-			args:         []interface{}{"Bob"},
+			args:         []any{"Bob"},
 			partial:      false,
 			partialValue: "~Bob~",
 			finalValue:   "~Bob~",
-			steps: []interface{}{
+			steps: []any{
 				jsonnet.ObjectFieldStep{Field: "person2"},
 				jsonnet.ObjectFieldStep{Field: "name"},
 			},
@@ -342,7 +343,7 @@ Do()
 
 	// Evaluate and assert
 	actual, err := Evaluate(code, ctx)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, expected, actual)
 	assert.Equal(t, expectedNotifications, notifier.values)
 }
@@ -353,14 +354,14 @@ type testNotifier struct {
 
 type generatedValue struct {
 	fnName       string
-	args         []interface{}
+	args         []any
 	partial      bool
-	partialValue interface{}
-	finalValue   interface{}
-	steps        []interface{}
+	partialValue any
+	finalValue   any
+	steps        []any
 }
 
-func (n *testNotifier) OnGeneratedValue(fnName string, args []interface{}, partial bool, partialValue, finalValue interface{}, steps []interface{}) {
+func (n *testNotifier) OnGeneratedValue(fnName string, args []any, partial bool, partialValue, finalValue any, steps []any) {
 	n.values = append(n.values, generatedValue{
 		fnName:       fnName,
 		args:         args,

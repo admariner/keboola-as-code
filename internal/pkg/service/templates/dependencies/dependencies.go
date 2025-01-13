@@ -52,13 +52,13 @@ type APIScope interface {
 	dependencies.BaseScope
 	dependencies.PublicScope
 	dependencies.EtcdClientScope
-	dependencies.TaskScope
 	dependencies.DistributionScope
+	dependencies.DistributedLockScope
+	dependencies.TaskScope
 	APIConfig() config.Config
 	Schema() *schema.Schema
 	Store() *store.Store
 	RepositoryManager() *repositoryManager.Manager
-	ProjectLocker() *Locker
 }
 
 // PublicRequestScope interface provides dependencies for a public request that doesn't need the Storage API token.

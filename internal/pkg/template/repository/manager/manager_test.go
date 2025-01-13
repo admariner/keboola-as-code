@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
@@ -33,8 +34,8 @@ func TestNew(t *testing.T) {
 
 	// Copy the git repository to temp
 	tmpDir := t.TempDir()
-	assert.NoError(t, aferofs.CopyFs2Fs(nil, filepath.Join("test", "repository"), nil, tmpDir))
-	assert.NoError(t, os.Rename(filepath.Join(tmpDir, ".gittest"), filepath.Join(tmpDir, ".git")))
+	require.NoError(t, aferofs.CopyFs2Fs(nil, filepath.Join("test", "repository"), nil, tmpDir))
+	require.NoError(t, os.Rename(filepath.Join(tmpDir, ".gittest"), filepath.Join(tmpDir, ".git")))
 	ref := model.TemplateRepository{
 		Type: model.RepositoryTypeGit,
 		Name: repository.DefaultTemplateRepositoryName,
@@ -44,15 +45,15 @@ func TestNew(t *testing.T) {
 
 	// Create manager
 	ctx := context.Background()
-	d := dependencies.NewMocked(t)
+	d := dependencies.NewMocked(t, ctx)
 	m, err := manager.New(ctx, d, nil)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	repo, unlockFn, err := m.Repository(ctx, ref)
-	assert.NoError(t, err)
-	defer unlockFn()
-
-	assert.True(t, repo.Fs().Exists("template1"))
+	if assert.NoError(t, err) {
+		defer unlockFn()
+		assert.True(t, repo.Fs().Exists(context.Background(), "template1"))
+	}
 }
 
 func TestRepository(t *testing.T) {
@@ -63,8 +64,8 @@ func TestRepository(t *testing.T) {
 
 	// Copy the git repository to temp
 	tmpDir := t.TempDir()
-	assert.NoError(t, aferofs.CopyFs2Fs(nil, filepath.Join("test", "repository"), nil, tmpDir))
-	assert.NoError(t, os.Rename(filepath.Join(tmpDir, ".gittest"), filepath.Join(tmpDir, ".git")))
+	require.NoError(t, aferofs.CopyFs2Fs(nil, filepath.Join("test", "repository"), nil, tmpDir))
+	require.NoError(t, os.Rename(filepath.Join(tmpDir, ".gittest"), filepath.Join(tmpDir, ".git")))
 	repo := model.TemplateRepository{
 		Type: model.RepositoryTypeGit,
 		Name: repository.DefaultTemplateRepositoryName,
@@ -74,19 +75,21 @@ func TestRepository(t *testing.T) {
 
 	// Create manager
 	ctx := context.Background()
-	d := dependencies.NewMocked(t)
+	d := dependencies.NewMocked(t, ctx)
 	m, err := manager.New(ctx, d, nil)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	v, unlockFn1, err := m.Repository(ctx, repo)
-	assert.NotNil(t, v)
-	assert.NoError(t, err)
-	defer unlockFn1()
+	if assert.NoError(t, err) {
+		assert.NotNil(t, v)
+		defer unlockFn1()
+	}
 
 	v, unlockFn2, err := m.Repository(ctx, repo)
-	assert.NotNil(t, v)
-	assert.NoError(t, err)
-	defer unlockFn2()
+	if assert.NoError(t, err) {
+		assert.NotNil(t, v)
+		defer unlockFn2()
+	}
 }
 
 func TestRepositoryUpdate(t *testing.T) {
@@ -100,8 +103,8 @@ func TestRepositoryUpdate(t *testing.T) {
 
 	// Copy the git repository to temp
 	tmpDir := t.TempDir()
-	assert.NoError(t, aferofs.CopyFs2Fs(nil, filepath.Join("test", "repository"), nil, tmpDir))
-	assert.NoError(t, os.Rename(filepath.Join(tmpDir, ".gittest"), filepath.Join(tmpDir, ".git")))
+	require.NoError(t, aferofs.CopyFs2Fs(nil, filepath.Join("test", "repository"), nil, tmpDir))
+	require.NoError(t, os.Rename(filepath.Join(tmpDir, ".gittest"), filepath.Join(tmpDir, ".git")))
 	repo := model.TemplateRepository{
 		Type: model.RepositoryTypeGit,
 		Name: repository.DefaultTemplateRepositoryName,
@@ -110,36 +113,38 @@ func TestRepositoryUpdate(t *testing.T) {
 	}
 
 	// Create manager
-	d := dependencies.NewMocked(t)
+	d := dependencies.NewMocked(t, ctx)
 	m, err := manager.New(ctx, d, []model.TemplateRepository{repo})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Check FS
 	repoInst, unlock, err := m.Repository(ctx, repo)
-	assert.NoError(t, err)
-	assert.True(t, repoInst.Fs().Exists(".keboola"))
-	assert.True(t, repoInst.Fs().Exists("_common"))
-	assert.True(t, repoInst.Fs().Exists("template1"))
-	assert.False(t, repoInst.Fs().Exists("template2"))
-	unlock()
+	if assert.NoError(t, err) {
+		assert.True(t, repoInst.Fs().Exists(ctx, ".keboola"))
+		assert.True(t, repoInst.Fs().Exists(ctx, "_common"))
+		assert.True(t, repoInst.Fs().Exists(ctx, "template1"))
+		assert.False(t, repoInst.Fs().Exists(ctx, "template2"))
+		unlock()
+	}
 
 	// 1. update - no change
-	assert.NoError(t, <-m.Update(ctx))
+	require.NoError(t, <-m.Update(ctx))
 
 	// Modify git repository
 	runGitCommand(t, tmpDir, "reset", "--hard", "b1")
 
 	// 2. update - change
-	assert.NoError(t, <-m.Update(ctx))
+	require.NoError(t, <-m.Update(ctx))
 
 	// Check FS
 	repoInst, unlock, err = m.Repository(ctx, repo)
-	assert.NoError(t, err)
-	assert.True(t, repoInst.Fs().Exists(".keboola"))
-	assert.False(t, repoInst.Fs().Exists("_common"))
-	assert.False(t, repoInst.Fs().Exists("template1"))
-	assert.True(t, repoInst.Fs().Exists("template2"))
-	unlock()
+	if assert.NoError(t, err) {
+		assert.True(t, repoInst.Fs().Exists(ctx, ".keboola"))
+		assert.False(t, repoInst.Fs().Exists(ctx, "_common"))
+		assert.False(t, repoInst.Fs().Exists(ctx, "template1"))
+		assert.True(t, repoInst.Fs().Exists(ctx, "template2"))
+		unlock()
+	}
 
 	// Check metrics
 	histBounds := []float64{0, 5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000, 7500, 10000} // ms
@@ -230,8 +235,8 @@ func TestDefaultRepositories(t *testing.T) {
 
 	// Copy the git repository to temp
 	tmpDir := t.TempDir()
-	assert.NoError(t, aferofs.CopyFs2Fs(nil, filepath.Join("test", "repository"), nil, tmpDir))
-	assert.NoError(t, os.Rename(filepath.Join(tmpDir, ".gittest"), filepath.Join(tmpDir, ".git")))
+	require.NoError(t, aferofs.CopyFs2Fs(nil, filepath.Join("test", "repository"), nil, tmpDir))
+	require.NoError(t, os.Rename(filepath.Join(tmpDir, ".gittest"), filepath.Join(tmpDir, ".git")))
 
 	// Define default repositories
 	gitURL := fmt.Sprintf("file://%s", tmpDir)
@@ -252,9 +257,9 @@ func TestDefaultRepositories(t *testing.T) {
 
 	// Create manager
 	ctx := context.Background()
-	d := dependencies.NewMocked(t)
+	d := dependencies.NewMocked(t, ctx)
 	m, err := manager.New(ctx, d, defaultRepositories)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Get list of default repositories
 	assert.Equal(t, defaultRepositories, m.DefaultRepositories())
@@ -271,5 +276,5 @@ func runGitCommand(t *testing.T, dir string, args ...string) {
 	cmd.Dir = dir
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	assert.NoError(t, cmd.Run(), "STDOUT:\n"+stdout.String()+"\n\nSTDERR:\n"+stderr.String())
+	require.NoError(t, cmd.Run(), "STDOUT:\n"+stdout.String()+"\n\nSTDERR:\n"+stderr.String())
 }

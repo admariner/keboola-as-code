@@ -7,6 +7,7 @@ import (
 
 	"github.com/jarcoal/httpmock"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/env"
 	"github.com/keboola/keboola-as-code/internal/pkg/model"
@@ -15,6 +16,9 @@ import (
 
 func TestValidateState(t *testing.T) {
 	t.Parallel()
+
+	ctx := context.Background()
+
 	// Create state
 	envs := env.Empty()
 	envs.Set("TEST_KBC_STORAGE_API_HOST", "foo.bar")
@@ -23,16 +27,16 @@ func TestValidateState(t *testing.T) {
 	envs.Set("LOCAL_STATE_GENERIC_CONFIG_ID", `456`)
 
 	// Container
-	d := dependencies.NewMocked(t)
+	d := dependencies.NewMocked(t, ctx)
 	state := d.MockedState()
 
 	// Mocked component response
-	getGenericExResponder, err := httpmock.NewJsonResponder(200, map[string]interface{}{
+	getGenericExResponder, err := httpmock.NewJsonResponder(200, map[string]any{
 		"id":   "keboola.foo",
 		"type": "writer",
 		"name": "Foo",
 	})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	d.MockedHTTPTransport().RegisterResponder("GET", `=~/storage/components/keboola.foo`, getGenericExResponder)
 
 	// Add invalid objects
@@ -48,7 +52,7 @@ func TestValidateState(t *testing.T) {
 			BranchKey: branchKey,
 		},
 	}
-	assert.NoError(t, state.Set(branchState))
+	require.NoError(t, state.Set(branchState))
 
 	// Add invalid config
 	configKey := model.ConfigKey{BranchID: 456, ComponentID: "keboola.foo", ID: "234"}
@@ -63,7 +67,7 @@ func TestValidateState(t *testing.T) {
 			ConfigKey: configKey,
 		},
 	}
-	assert.NoError(t, state.Set(configState))
+	require.NoError(t, state.Set(configState))
 
 	// Validate
 	localErr, remoteErr := state.Validate(context.Background())
@@ -76,8 +80,8 @@ remote config "branch:456/component:keboola.foo/config:234" is not valid:
 - "name" is a required field
 - "configuration" is a required field
 `
-	assert.Error(t, localErr)
-	assert.Error(t, remoteErr)
+	require.Error(t, localErr)
+	require.Error(t, remoteErr)
 	assert.Equal(t, strings.TrimSpace(expectedLocalError), localErr.Error())
 	assert.Equal(t, strings.TrimSpace(expectedRemoteError), remoteErr.Error())
 }

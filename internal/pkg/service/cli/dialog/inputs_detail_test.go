@@ -1,10 +1,12 @@
 package dialog
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/umisama/go-regexpcache"
 
 	nopPrompt "github.com/keboola/keboola-as-code/internal/pkg/service/cli/prompt/nop"
@@ -27,8 +29,8 @@ func TestInputsDetailDialog_Parse_DefaultValue(t *testing.T) {
 
 	// Parse
 	d := newInputsDetailsDialog(nopPrompt.New(), testInputs(), testStepsGroups())
-	stepGroups, err := d.parse(inputsDetailDialogDefaultValue)
-	assert.NoError(t, err)
+	stepGroups, err := d.parse(context.Background(), inputsDetailDialogDefaultValue)
+	require.NoError(t, err)
 	assert.Equal(t, testInputs().All(), d.inputs.All())
 
 	// Inputs are connected to default step group
@@ -138,8 +140,8 @@ options: {"value1":"Label 1","value2":"Label 2","value3":123}  <!-- invalid opti
 
 	// Parse
 	d := newInputsDetailsDialog(nopPrompt.New(), testInputs(), testStepsGroups())
-	_, err := d.parse(result)
-	assert.Error(t, err)
+	_, err := d.parse(context.Background(), result)
+	require.Error(t, err)
 	assert.Equal(t, strings.Trim(expected, "\n"), err.Error())
 }
 
@@ -235,7 +237,7 @@ func testInputs() input.InputsMap {
 		Description: "Description",
 		Type:        input.TypeStringArray,
 		Kind:        input.KindMultiSelect,
-		Default:     []interface{}{"value1", "value3"},
+		Default:     []any{"value1", "value3"},
 		Options: input.Options{
 			{
 				Value: "value1",

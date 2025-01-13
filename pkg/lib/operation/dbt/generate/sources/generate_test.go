@@ -6,6 +6,7 @@ import (
 
 	"github.com/keboola/go-client/pkg/keboola"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v2"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/dbt"
@@ -16,18 +17,24 @@ func TestGenerateSourcesDefinition(t *testing.T) {
 	t.Parallel()
 
 	bucket := &keboola.Bucket{
-		ID:          keboola.MustParseBucketID("out.c-main"),
+		BucketKey: keboola.BucketKey{
+			BranchID: 123,
+			BucketID: keboola.MustParseBucketID("out.c-main"),
+		},
 		URI:         "/uri",
 		DisplayName: "main",
 	}
 
 	dbtBucket := listbuckets.Bucket{
-		SourceName:  bucket.ID.String(),
-		Schema:      bucket.ID.String(),
+		SourceName:  bucket.BucketID.String(),
+		Schema:      bucket.BucketID.String(),
 		DatabaseEnv: "DBT_KBC_TARGET1_DATABASE",
 		Tables: []keboola.Table{
 			{
-				ID:          keboola.MustParseTableID("out.c-main.products"),
+				TableKey: keboola.TableKey{
+					BranchID: 123,
+					TableID:  keboola.MustParseTableID("out.c-main.products"),
+				},
 				URI:         "/uri",
 				Name:        "products",
 				DisplayName: "Products",
@@ -35,7 +42,10 @@ func TestGenerateSourcesDefinition(t *testing.T) {
 				Bucket:      bucket,
 			},
 			{
-				ID:          keboola.MustParseTableID("out.c-main.categories"),
+				TableKey: keboola.TableKey{
+					BranchID: 123,
+					TableID:  keboola.MustParseTableID("out.c-main.categories"),
+				},
 				URI:         "/uri",
 				Name:        "categories",
 				DisplayName: "Categories",
@@ -92,8 +102,8 @@ func TestGenerateSourcesDefinition(t *testing.T) {
 	}, res)
 
 	yamlEnc, err := yaml.Marshal(&res)
-	assert.NoError(t, err)
-	assert.Equal(t, strings.TrimSpace(`
+	require.NoError(t, err)
+	assert.YAMLEq(t, strings.TrimSpace(`
 version: 2
 sources:
 - name: out.c-main
@@ -132,19 +142,25 @@ func TestGenerateSourcesDefinition_LinkedBucket(t *testing.T) {
 	t.Parallel()
 
 	bucket := &keboola.Bucket{
-		ID:          keboola.MustParseBucketID("out.c-main"),
+		BucketKey: keboola.BucketKey{
+			BranchID: 123,
+			BucketID: keboola.MustParseBucketID("out.c-main"),
+		},
 		URI:         "/uri",
 		DisplayName: "main",
 	}
 
 	dbtBucket := listbuckets.Bucket{
 		LinkedProjectID: 12345,
-		SourceName:      bucket.ID.String(),
-		Schema:          bucket.ID.String(),
+		SourceName:      bucket.BucketID.String(),
+		Schema:          bucket.BucketID.String(),
 		DatabaseEnv:     "DBT_KBC_TARGET1_12345_DATABASE",
 		Tables: []keboola.Table{
 			{
-				ID:          keboola.MustParseTableID("out.c-main.products"),
+				TableKey: keboola.TableKey{
+					BranchID: 123,
+					TableID:  keboola.MustParseTableID("out.c-main.products"),
+				},
 				URI:         "/uri",
 				Name:        "products",
 				DisplayName: "Products",
@@ -152,7 +168,10 @@ func TestGenerateSourcesDefinition_LinkedBucket(t *testing.T) {
 				Bucket:      bucket,
 			},
 			{
-				ID:          keboola.MustParseTableID("out.c-main.categories"),
+				TableKey: keboola.TableKey{
+					BranchID: 123,
+					TableID:  keboola.MustParseTableID("out.c-main.categories"),
+				},
 				URI:         "/uri",
 				Name:        "categories",
 				DisplayName: "Categories",
@@ -209,8 +228,8 @@ func TestGenerateSourcesDefinition_LinkedBucket(t *testing.T) {
 	}, res)
 
 	yamlEnc, err := yaml.Marshal(&res)
-	assert.NoError(t, err)
-	assert.Equal(t, strings.TrimSpace(`
+	require.NoError(t, err)
+	assert.YAMLEq(t, strings.TrimSpace(`
 version: 2
 sources:
 - name: out.c-main

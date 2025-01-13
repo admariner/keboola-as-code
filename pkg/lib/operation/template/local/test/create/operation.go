@@ -2,6 +2,7 @@ package create
 
 import (
 	"context"
+	"io"
 	"os"
 
 	"github.com/keboola/go-client/pkg/keboola"
@@ -24,6 +25,8 @@ type dependencies interface {
 	Process() *servicectx.Process
 	Logger() log.Logger
 	Telemetry() telemetry.Telemetry
+	Stdout() io.Writer
+	Stderr() io.Writer
 }
 
 func Run(ctx context.Context, tmpl *template.Template, o Options, d dependencies) (err error) {
@@ -33,17 +36,17 @@ func Run(ctx context.Context, tmpl *template.Template, o Options, d dependencies
 	}
 	defer func() {
 		if err := os.RemoveAll(tempDir); err != nil { // nolint: forbidigo
-			d.Logger().Warnf(`cannot remove temp dir "%s": %w`, tempDir, err)
+			d.Logger().Warnf(ctx, `cannot remove temp dir "%s": %w`, tempDir, err)
 		}
 	}()
 
 	branchID := 1
-	prjState, _, testDeps, unlockFn, err := tmplTest.PrepareProject(ctx, d.Logger(), d.Telemetry(), d.Process(), branchID, false)
+	prjState, _, testDeps, unlockFn, err := tmplTest.PrepareProject(ctx, d.Logger(), d.Telemetry(), tmpl.ProjectsFilePath(), d.Stdout(), d.Stderr(), d.Process(), branchID, false)
 	if err != nil {
 		return err
 	}
 	defer unlockFn()
-	d.Logger().Debugf(`Working directory set up.`)
+	d.Logger().Debugf(ctx, `Working directory set up.`)
 
 	// Run use template operation
 	tmplOpts := useTemplate.Options{
@@ -60,12 +63,12 @@ func Run(ctx context.Context, tmpl *template.Template, o Options, d dependencies
 	}
 
 	// Create test files
-	err = tmpl.CreateTest(o.TestName, o.Inputs, prjState, opResult.InstanceID)
+	err = tmpl.CreateTest(ctx, o.TestName, o.Inputs, prjState, opResult.InstanceID)
 	if err != nil {
 		return err
 	}
 
-	d.Logger().Infof("The test was created in folder tests/%s.", o.TestName)
+	d.Logger().Infof(ctx, "The test was created in folder tests/%s.", o.TestName)
 
 	return nil
 }

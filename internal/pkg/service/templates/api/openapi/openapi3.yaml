@@ -105,31 +105,20 @@ paths:
                             example:
                                 instances:
                                     - branch: "5876"
+                                      configurations:
+                                        - componentId: keboola.ex-db-mysql
+                                          configId: "7954825835"
+                                          name: My Extractor
                                       created:
                                         date: "2022-04-28T14:20:04+00:00"
                                         tokenId: "245941"
-                                      instanceId: Temporibus praesentium explicabo laudantium.
+                                      instanceId: abc123
                                       mainConfig:
                                         componentId: keboola.orchestrator
                                         configId: "7954825835"
                                       name: My Instance
                                       repositoryName: keboola
-                                      templateId: "9"
-                                      updated:
-                                        date: "2022-04-28T14:20:04+00:00"
-                                        tokenId: "245941"
-                                      version: v1.1.0
-                                    - branch: "5876"
-                                      created:
-                                        date: "2022-04-28T14:20:04+00:00"
-                                        tokenId: "245941"
-                                      instanceId: Temporibus praesentium explicabo laudantium.
-                                      mainConfig:
-                                        componentId: keboola.orchestrator
-                                        configId: "7954825835"
-                                      name: My Instance
-                                      repositoryName: keboola
-                                      templateId: "9"
+                                      templateId: aa
                                       updated:
                                         date: "2022-04-28T14:20:04+00:00"
                                         tokenId: "245941"
@@ -140,6 +129,10 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/GenericError'
+                            example:
+                                statusCode: 404
+                                error: templates.branchNotFound
+                                message: Branch "123" not found.
             security:
                 - storage-api-token: []
     /v1/project/{branch}/instances/{instanceId}:
@@ -163,23 +156,42 @@ paths:
                   required: true
                   schema:
                     type: string
+                    description: ID of the template instance.
                     example: V1StGXR8IZ5jdHi6BAmyT
                   example: V1StGXR8IZ5jdHi6BAmyT
             responses:
-                "204":
-                    description: No Content response.
+                "202":
+                    description: Accepted response.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Task'
+                            example:
+                                id: task-1
+                                url: https://templates.keboola.com/v1/tasks/template.use/2018-01-01T00:00:00.000Z_dIklP
+                                type: template.use
+                                createdAt: "2018-01-01T00:00:00.000Z"
+                                finishedAt: "2018-01-01T00:00:00.000Z"
+                                isFinished: true
+                                duration: 123
+                                result: task succeeded
+                                outputs:
+                                    instanceId: V1StGXR8IZ5jdHi6BAmyT
                 "404":
                     description: 'templates.instanceNotFound: Instance not found error.'
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/GenericError'
+                            example:
+                                statusCode: 404
+                                error: templates.instanceNotFound
+                                message: Instance "V1StGXR8IZ5jdHi6BAmyT" not found.
                 "503":
                     description: 'templates.projectLocked: Access to branch metadata must be atomic, so only one write operation can run at a time. If this error occurs, the client should make retries, see Retry-After header.'
                     headers:
                         Retry-After:
                             description: Indicates how long the user agent should wait before making a follow-up request.
-                            required: true
                             schema:
                                 type: string
                                 description: Indicates how long the user agent should wait before making a follow-up request.
@@ -188,7 +200,11 @@ paths:
                     content:
                         application/json:
                             schema:
-                                $ref: '#/components/schemas/GenericError'
+                                $ref: '#/components/schemas/ProjectLockedError5'
+                            example:
+                                statusCode: 503
+                                error: templates.projectLocked
+                                message: The project is locked, another operation is in progress, please try again later.
             security:
                 - storage-api-token: []
         get:
@@ -211,6 +227,7 @@ paths:
                   required: true
                   schema:
                     type: string
+                    description: ID of the template instance.
                     example: V1StGXR8IZ5jdHi6BAmyT
                   example: V1StGXR8IZ5jdHi6BAmyT
             responses:
@@ -226,21 +243,15 @@ paths:
                                     - componentId: keboola.ex-db-mysql
                                       configId: "7954825835"
                                       name: My Extractor
-                                    - componentId: keboola.ex-db-mysql
-                                      configId: "7954825835"
-                                      name: My Extractor
-                                    - componentId: keboola.ex-db-mysql
-                                      configId: "7954825835"
-                                      name: My Extractor
                                 created:
                                     date: "2022-04-28T14:20:04+00:00"
                                     tokenId: "245941"
-                                instanceId: Qui qui vel et esse ipsum.
+                                instanceId: abc123
                                 mainConfig:
                                     componentId: keboola.orchestrator
                                     configId: "7954825835"
                                 name: My Instance
-                                repositoryName: At quia delectus.
+                                repositoryName: abc123
                                 templateDetail:
                                     author:
                                         name: Keboola
@@ -248,13 +259,13 @@ paths:
                                     defaultVersion: v1.2.3
                                     deprecated: false
                                     description: Full workflow to load all user accounts from the Service.
-                                    id: c
+                                    id: aa
                                     name: My Template
-                                templateId: Molestiae ut.
+                                templateId: abc123
                                 updated:
                                     date: "2022-04-28T14:20:04+00:00"
                                     tokenId: "245941"
-                                version: Perferendis exercitationem est.
+                                version: abc123
                                 versionDetail:
                                     exampleversiondata:
                                         version: v1.2.3
@@ -271,6 +282,10 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/GenericError'
+                            example:
+                                statusCode: 404
+                                error: templates.instanceNotFound
+                                message: Instance "V1StGXR8IZ5jdHi6BAmyT" not found.
             security:
                 - storage-api-token: []
         put:
@@ -293,6 +308,7 @@ paths:
                   required: true
                   schema:
                     type: string
+                    description: ID of the template instance.
                     example: V1StGXR8IZ5jdHi6BAmyT
                   example: V1StGXR8IZ5jdHi6BAmyT
             requestBody:
@@ -316,21 +332,15 @@ paths:
                                     - componentId: keboola.ex-db-mysql
                                       configId: "7954825835"
                                       name: My Extractor
-                                    - componentId: keboola.ex-db-mysql
-                                      configId: "7954825835"
-                                      name: My Extractor
-                                    - componentId: keboola.ex-db-mysql
-                                      configId: "7954825835"
-                                      name: My Extractor
                                 created:
                                     date: "2022-04-28T14:20:04+00:00"
                                     tokenId: "245941"
-                                instanceId: Exercitationem laboriosam.
+                                instanceId: abc123
                                 mainConfig:
                                     componentId: keboola.orchestrator
                                     configId: "7954825835"
                                 name: My Instance
-                                repositoryName: Architecto sequi ipsa non.
+                                repositoryName: abc123
                                 templateDetail:
                                     author:
                                         name: Keboola
@@ -338,13 +348,13 @@ paths:
                                     defaultVersion: v1.2.3
                                     deprecated: false
                                     description: Full workflow to load all user accounts from the Service.
-                                    id: c
+                                    id: aa
                                     name: My Template
-                                templateId: Numquam sed qui cum dolores voluptas.
+                                templateId: abc123
                                 updated:
                                     date: "2022-04-28T14:20:04+00:00"
                                     tokenId: "245941"
-                                version: Perspiciatis suscipit esse enim nam modi eius.
+                                version: abc123
                                 versionDetail:
                                     exampleversiondata:
                                         version: v1.2.3
@@ -361,12 +371,15 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/GenericError'
+                            example:
+                                statusCode: 404
+                                error: templates.instanceNotFound
+                                message: Instance "V1StGXR8IZ5jdHi6BAmyT" not found.
                 "503":
                     description: 'templates.projectLocked: Access to branch metadata must be atomic, so only one write operation can run at a time. If this error occurs, the client should make retries, see Retry-After header.'
                     headers:
                         Retry-After:
                             description: Indicates how long the user agent should wait before making a follow-up request.
-                            required: true
                             schema:
                                 type: string
                                 description: Indicates how long the user agent should wait before making a follow-up request.
@@ -375,7 +388,11 @@ paths:
                     content:
                         application/json:
                             schema:
-                                $ref: '#/components/schemas/GenericError'
+                                $ref: '#/components/schemas/ProjectLockedError4'
+                            example:
+                                statusCode: 503
+                                error: templates.projectLocked
+                                message: The project is locked, another operation is in progress, please try again later.
             security:
                 - storage-api-token: []
     /v1/project/{branch}/instances/{instanceId}/upgrade/{version}:
@@ -399,6 +416,7 @@ paths:
                   required: true
                   schema:
                     type: string
+                    description: ID of the template instance.
                     example: V1StGXR8IZ5jdHi6BAmyT
                   example: V1StGXR8IZ5jdHi6BAmyT
                 - name: version
@@ -415,7 +433,7 @@ paths:
                 content:
                     application/json:
                         schema:
-                            $ref: '#/components/schemas/ValidateInputsRequestBody'
+                            $ref: '#/components/schemas/InputsPayload'
                         example:
                             steps:
                                 - id: g01-s01
@@ -448,18 +466,56 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/ValidationError'
+                            example:
+                                ValidationResult:
+                                    valid: false
+                                    stepGroups:
+                                        - id: g01
+                                          valid: false
+                                          error: All steps must be configured.
+                                          steps:
+                                            - id: g01-s01
+                                              configured: true
+                                              valid: false
+                                              inputs:
+                                                - id: api-token
+                                                  visible: true
+                                                  error: Value cannot be empty.
+                                                - id: password
+                                                  visible: false
+                                                  error: null
+                                        - id: g02
+                                          valid: true
+                                          error: null
+                                          steps:
+                                            - id: g02-s01
+                                              configured: false
+                                              valid: true
+                                              inputs: []
+                                            - id: g02-s02
+                                              configured: true
+                                              valid: true
+                                              inputs:
+                                                - id: username
+                                                  visible: true
+                                                  error: null
+                                error: InvalidPayload
+                                message: Inputs are not valid.
                 "404":
                     description: 'templates.versionNotFound: Version not found error.'
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/GenericError'
+                            example:
+                                statusCode: 404
+                                error: templates.versionNotFound
+                                message: Version "v1.2.3" not found.
                 "503":
                     description: 'templates.projectLocked: Access to branch metadata must be atomic, so only one write operation can run at a time. If this error occurs, the client should make retries, see Retry-After header.'
                     headers:
                         Retry-After:
                             description: Indicates how long the user agent should wait before making a follow-up request.
-                            required: true
                             schema:
                                 type: string
                                 description: Indicates how long the user agent should wait before making a follow-up request.
@@ -468,7 +524,11 @@ paths:
                     content:
                         application/json:
                             schema:
-                                $ref: '#/components/schemas/GenericError'
+                                $ref: '#/components/schemas/ProjectLockedError6'
+                            example:
+                                statusCode: 503
+                                error: templates.projectLocked
+                                message: The project is locked, another operation is in progress, please try again later.
             security:
                 - storage-api-token: []
     /v1/project/{branch}/instances/{instanceId}/upgrade/{version}/inputs:
@@ -492,6 +552,7 @@ paths:
                   required: true
                   schema:
                     type: string
+                    description: ID of the template instance.
                     example: V1StGXR8IZ5jdHi6BAmyT
                   example: V1StGXR8IZ5jdHi6BAmyT
                 - name: version
@@ -730,6 +791,10 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/GenericError'
+                            example:
+                                statusCode: 404
+                                error: templates.versionNotFound
+                                message: Version "v1.2.3" not found.
             security:
                 - storage-api-token: []
         post:
@@ -752,6 +817,7 @@ paths:
                   required: true
                   schema:
                     type: string
+                    description: ID of the template instance.
                     example: V1StGXR8IZ5jdHi6BAmyT
                   example: V1StGXR8IZ5jdHi6BAmyT
                 - name: version
@@ -768,7 +834,7 @@ paths:
                 content:
                     application/json:
                         schema:
-                            $ref: '#/components/schemas/ValidateInputsRequestBody'
+                            $ref: '#/components/schemas/InputsPayload'
                         example:
                             steps:
                                 - id: g01-s01
@@ -822,6 +888,10 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/GenericError'
+                            example:
+                                statusCode: 404
+                                error: templates.versionNotFound
+                                message: Version "v1.2.3" not found.
             security:
                 - storage-api-token: []
     /v1/repositories:
@@ -885,6 +955,10 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/GenericError'
+                            example:
+                                statusCode: 404
+                                error: templates.repositoryNotFound
+                                message: Repository "name" not found.
             security:
                 - storage-api-token: []
     /v1/repositories/{repository}/templates:
@@ -895,6 +969,15 @@ paths:
             description: List all templates  defined in the repository.
             operationId: TemplatesIndex
             parameters:
+                - name: filter
+                  in: query
+                  description: The 'filter' attribute specifies the category of templates to retrieve from the repository.
+                  allowEmptyValue: true
+                  schema:
+                    type: string
+                    description: The 'filter' attribute specifies the category of templates to retrieve from the repository.
+                    example: keboola.data-apps
+                  example: keboola.data-apps
                 - name: repository
                   in: path
                   description: Name of the template repository. Use "keboola" for default Keboola repository.
@@ -973,6 +1056,10 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/GenericError'
+                            example:
+                                statusCode: 404
+                                error: templates.repositoryNotFound
+                                message: Repository "name" not found.
             security:
                 - storage-api-token: []
     /v1/repositories/{repository}/templates/{template}:
@@ -997,6 +1084,7 @@ paths:
                   required: true
                   schema:
                     type: string
+                    description: ID of the template.
                     example: my-template
                     minLength: 1
                     maxLength: 40
@@ -1051,6 +1139,10 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/GenericError'
+                            example:
+                                statusCode: 404
+                                error: templates.templateNotFound
+                                message: Template "id" not found.
             security:
                 - storage-api-token: []
     /v1/repositories/{repository}/templates/{template}/{version}:
@@ -1075,6 +1167,7 @@ paths:
                   required: true
                   schema:
                     type: string
+                    description: ID of the template.
                     example: my-template
                     minLength: 1
                     maxLength: 40
@@ -1128,6 +1221,10 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/GenericError'
+                            example:
+                                statusCode: 404
+                                error: templates.versionNotFound
+                                message: Version "v1.2.3" not found.
             security:
                 - storage-api-token: []
     /v1/repositories/{repository}/templates/{template}/{version}/inputs:
@@ -1152,6 +1249,7 @@ paths:
                   required: true
                   schema:
                     type: string
+                    description: ID of the template.
                     example: my-template
                     minLength: 1
                     maxLength: 40
@@ -1392,17 +1490,21 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/GenericError'
+                            example:
+                                statusCode: 404
+                                error: templates.versionNotFound
+                                message: Version "v1.2.3" not found.
             security:
                 - storage-api-token: []
-    /v1/repositories/{repository}/templates/{template}/{version}/use:
+    /v1/repositories/{repository}/templates/{template}/{version}/preview:
         post:
             tags:
                 - template
-            summary: Use template
+            summary: Preview template
             description: |-
-                Validate inputs and use template in the branch.
+                Validate inputs and preview raw configuration generated by template in the branch.
                 Only configured steps should be send.
-            operationId: UseTemplateVersion
+            operationId: Preview
             parameters:
                 - name: repository
                   in: path
@@ -1418,6 +1520,7 @@ paths:
                   required: true
                   schema:
                     type: string
+                    description: ID of the template.
                     example: my-template
                     minLength: 1
                     maxLength: 40
@@ -1471,18 +1574,56 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/ValidationError'
+                            example:
+                                ValidationResult:
+                                    valid: false
+                                    stepGroups:
+                                        - id: g01
+                                          valid: false
+                                          error: All steps must be configured.
+                                          steps:
+                                            - id: g01-s01
+                                              configured: true
+                                              valid: false
+                                              inputs:
+                                                - id: api-token
+                                                  visible: true
+                                                  error: Value cannot be empty.
+                                                - id: password
+                                                  visible: false
+                                                  error: null
+                                        - id: g02
+                                          valid: true
+                                          error: null
+                                          steps:
+                                            - id: g02-s01
+                                              configured: false
+                                              valid: true
+                                              inputs: []
+                                            - id: g02-s02
+                                              configured: true
+                                              valid: true
+                                              inputs:
+                                                - id: username
+                                                  visible: true
+                                                  error: null
+                                error: InvalidPayload
+                                message: Inputs are not valid.
                 "404":
                     description: 'templates.versionNotFound: Version not found error.'
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/GenericError'
+                            example:
+                                statusCode: 404
+                                error: templates.versionNotFound
+                                message: Version "v1.2.3" not found.
                 "503":
                     description: 'templates.projectLocked: Access to branch metadata must be atomic, so only one write operation can run at a time. If this error occurs, the client should make retries, see Retry-After header.'
                     headers:
                         Retry-After:
                             description: Indicates how long the user agent should wait before making a follow-up request.
-                            required: true
                             schema:
                                 type: string
                                 description: Indicates how long the user agent should wait before making a follow-up request.
@@ -1491,7 +1632,154 @@ paths:
                     content:
                         application/json:
                             schema:
+                                $ref: '#/components/schemas/ProjectLockedError3'
+                            example:
+                                statusCode: 503
+                                error: templates.projectLocked
+                                message: The project is locked, another operation is in progress, please try again later.
+            security:
+                - storage-api-token: []
+    /v1/repositories/{repository}/templates/{template}/{version}/use:
+        post:
+            tags:
+                - template
+            summary: Use template
+            description: |-
+                Validate inputs and use template in the branch.
+                Only configured steps should be send.
+            operationId: UseTemplateVersion
+            parameters:
+                - name: repository
+                  in: path
+                  description: Name of the template repository. Use "keboola" for default Keboola repository.
+                  required: true
+                  schema:
+                    type: string
+                    description: Name of the template repository. Use "keboola" for default Keboola repository.
+                    example: keboola
+                  example: keboola
+                - name: template
+                  in: path
+                  required: true
+                  schema:
+                    type: string
+                    description: ID of the template.
+                    example: my-template
+                    minLength: 1
+                    maxLength: 40
+                  example: my-template
+                - name: version
+                  in: path
+                  description: Semantic version of the template. Use "default" for default version.
+                  required: true
+                  schema:
+                    type: string
+                    description: Semantic version of the template. Use "default" for default version.
+                    example: v1.2.3
+                  example: v1.2.3
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/UseTemplateVersionRequestBody'
+                        example:
+                            branch: default
+                            name: My Instance
+                            steps:
+                                - id: g01-s01
+                                  inputs:
+                                    - id: user
+                                      value: user@example.com
+                                    - id: api-token
+                                      value: "123456"
+            responses:
+                "202":
+                    description: Accepted response.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/Task'
+                            example:
+                                id: task-1
+                                url: https://templates.keboola.com/v1/tasks/template.use/2018-01-01T00:00:00.000Z_dIklP
+                                type: template.use
+                                createdAt: "2018-01-01T00:00:00.000Z"
+                                finishedAt: "2018-01-01T00:00:00.000Z"
+                                isFinished: true
+                                duration: 123
+                                result: task succeeded
+                                outputs:
+                                    instanceId: V1StGXR8IZ5jdHi6BAmyT
+                "400":
+                    description: 'InvalidInputs: Inputs are not valid.'
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ValidationError'
+                            example:
+                                ValidationResult:
+                                    valid: false
+                                    stepGroups:
+                                        - id: g01
+                                          valid: false
+                                          error: All steps must be configured.
+                                          steps:
+                                            - id: g01-s01
+                                              configured: true
+                                              valid: false
+                                              inputs:
+                                                - id: api-token
+                                                  visible: true
+                                                  error: Value cannot be empty.
+                                                - id: password
+                                                  visible: false
+                                                  error: null
+                                        - id: g02
+                                          valid: true
+                                          error: null
+                                          steps:
+                                            - id: g02-s01
+                                              configured: false
+                                              valid: true
+                                              inputs: []
+                                            - id: g02-s02
+                                              configured: true
+                                              valid: true
+                                              inputs:
+                                                - id: username
+                                                  visible: true
+                                                  error: null
+                                error: InvalidPayload
+                                message: Inputs are not valid.
+                "404":
+                    description: 'templates.versionNotFound: Version not found error.'
+                    content:
+                        application/json:
+                            schema:
                                 $ref: '#/components/schemas/GenericError'
+                            example:
+                                statusCode: 404
+                                error: templates.versionNotFound
+                                message: Version "v1.2.3" not found.
+                "503":
+                    description: 'templates.projectLocked: Access to branch metadata must be atomic, so only one write operation can run at a time. If this error occurs, the client should make retries, see Retry-After header.'
+                    headers:
+                        Retry-After:
+                            description: Indicates how long the user agent should wait before making a follow-up request.
+                            schema:
+                                type: string
+                                description: Indicates how long the user agent should wait before making a follow-up request.
+                                example: <http-date>/<delay-seconds>
+                            example: <http-date>/<delay-seconds>
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ProjectLockedError2'
+                            example:
+                                statusCode: 503
+                                error: templates.projectLocked
+                                message: The project is locked, another operation is in progress, please try again later.
             security:
                 - storage-api-token: []
     /v1/repositories/{repository}/templates/{template}/{version}/validate:
@@ -1518,6 +1806,7 @@ paths:
                   required: true
                   schema:
                     type: string
+                    description: ID of the template.
                     example: my-template
                     minLength: 1
                     maxLength: 40
@@ -1536,7 +1825,7 @@ paths:
                 content:
                     application/json:
                         schema:
-                            $ref: '#/components/schemas/ValidateInputsRequestBody'
+                            $ref: '#/components/schemas/InputsPayload'
                         example:
                             steps:
                                 - id: g01-s01
@@ -1590,6 +1879,10 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/GenericError'
+                            example:
+                                statusCode: 404
+                                error: templates.versionNotFound
+                                message: Version "v1.2.3" not found.
             security:
                 - storage-api-token: []
     /v1/tasks/{taskId}:
@@ -1605,6 +1898,7 @@ paths:
                   required: true
                   schema:
                     type: string
+                    description: Unique ID of the task.
                     example: task_1234
                   example: task_1234
             responses:
@@ -1631,6 +1925,10 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/GenericError'
+                            example:
+                                statusCode: 404
+                                error: templates.taskNotFound
+                                message: Task "001" not found.
             security:
                 - storage-api-token: []
 components:
@@ -1655,6 +1953,17 @@ components:
             required:
                 - name
                 - url
+        BranchRequest:
+            type: object
+            properties:
+                branch:
+                    type: string
+                    description: ID of the branch. Use "default" for default branch.
+                    example: default
+            example:
+                branch: default
+            required:
+                - branch
         ChangeInfo:
             type: object
             properties:
@@ -1714,15 +2023,26 @@ components:
                     description: HTTP status code.
                     example: 500
                     format: int64
-            description: Repository not found error.
+            description: Generic error
             example:
-                statusCode: 404
-                error: templates.repositoryNotFound
-                message: Repository "name" not found.
+                error: templates.internalError
+                message: Internal Error
+                statusCode: 500
             required:
                 - statusCode
                 - error
                 - message
+        GetTaskRequest:
+            type: object
+            properties:
+                taskId:
+                    type: string
+                    description: Unique ID of the task.
+                    example: task_1234
+            example:
+                taskId: task_1234
+            required:
+                - taskId
         Input:
             type: object
             properties:
@@ -2070,6 +2390,7 @@ components:
                                   default: example.com
                                   options: null
                     minItems: 1
+            description: List of the inputs divided to step groups and steps.
             example:
                 initialState:
                     valid: false
@@ -2287,6 +2608,31 @@ components:
             required:
                 - stepGroups
                 - initialState
+        InputsPayload:
+            type: object
+            properties:
+                steps:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/StepPayload'
+                    description: Steps with input values filled in by user.
+                    example:
+                        - id: g01-s01
+                          inputs:
+                            - id: user
+                              value: user@example.com
+                            - id: api-token
+                              value: "123456"
+            example:
+                steps:
+                    - id: g01-s01
+                      inputs:
+                        - id: user
+                          value: user@example.com
+                        - id: api-token
+                          value: "123456"
+            required:
+                - steps
         Instance:
             type: object
             properties:
@@ -2294,11 +2640,21 @@ components:
                     type: string
                     description: ID of the branch.
                     example: "5876"
+                configurations:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/Config'
+                    description: All configurations from the instance.
+                    example:
+                        - componentId: keboola.ex-db-mysql
+                          configId: "7954825835"
+                          name: My Extractor
                 created:
                     $ref: '#/components/schemas/ChangeInfo'
                 instanceId:
                     type: string
-                    example: Voluptas adipisci et.
+                    description: ID of the template instance.
+                    example: V1StGXR8IZ5jdHi6BAmyT
                 mainConfig:
                     $ref: '#/components/schemas/MainConfig'
                 name:
@@ -2311,7 +2667,8 @@ components:
                     example: keboola
                 templateId:
                     type: string
-                    example: 21v
+                    description: ID of the template.
+                    example: my-template
                     minLength: 1
                     maxLength: 40
                 updated:
@@ -2323,16 +2680,20 @@ components:
             description: Template instance.
             example:
                 branch: "5876"
+                configurations:
+                    - componentId: keboola.ex-db-mysql
+                      configId: "7954825835"
+                      name: My Extractor
                 created:
                     date: "2022-04-28T14:20:04+00:00"
                     tokenId: "245941"
-                instanceId: Provident tempore sapiente eius qui.
+                instanceId: V1StGXR8IZ5jdHi6BAmyT
                 mainConfig:
                     componentId: keboola.orchestrator
                     configId: "7954825835"
                 name: My Instance
                 repositoryName: keboola
-                templateId: 5uz
+                templateId: my-template
                 updated:
                     date: "2022-04-28T14:20:04+00:00"
                     tokenId: "245941"
@@ -2342,6 +2703,48 @@ components:
                 - templateId
                 - version
                 - repositoryName
+                - branch
+                - name
+                - created
+                - updated
+                - configurations
+        InstanceBase:
+            type: object
+            properties:
+                branch:
+                    type: string
+                    description: ID of the branch.
+                    example: "5876"
+                created:
+                    $ref: '#/components/schemas/ChangeInfo'
+                instanceId:
+                    type: string
+                    description: ID of the template instance.
+                    example: V1StGXR8IZ5jdHi6BAmyT
+                mainConfig:
+                    $ref: '#/components/schemas/MainConfig'
+                name:
+                    type: string
+                    description: Name of the instance.
+                    example: My Instance
+                updated:
+                    $ref: '#/components/schemas/ChangeInfo'
+            description: Instance base information.
+            example:
+                branch: "5876"
+                created:
+                    date: "2022-04-28T14:20:04+00:00"
+                    tokenId: "245941"
+                instanceId: V1StGXR8IZ5jdHi6BAmyT
+                mainConfig:
+                    componentId: keboola.orchestrator
+                    configId: "7954825835"
+                name: My Instance
+                updated:
+                    date: "2022-04-28T14:20:04+00:00"
+                    tokenId: "245941"
+            required:
+                - instanceId
                 - branch
                 - name
                 - created
@@ -2362,20 +2765,12 @@ components:
                         - componentId: keboola.ex-db-mysql
                           configId: "7954825835"
                           name: My Extractor
-                        - componentId: keboola.ex-db-mysql
-                          configId: "7954825835"
-                          name: My Extractor
-                        - componentId: keboola.ex-db-mysql
-                          configId: "7954825835"
-                          name: My Extractor
-                        - componentId: keboola.ex-db-mysql
-                          configId: "7954825835"
-                          name: My Extractor
                 created:
                     $ref: '#/components/schemas/ChangeInfo'
                 instanceId:
                     type: string
-                    example: Aut veniam sunt tenetur.
+                    description: ID of the template instance.
+                    example: V1StGXR8IZ5jdHi6BAmyT
                 mainConfig:
                     $ref: '#/components/schemas/MainConfig'
                 name:
@@ -2384,17 +2779,17 @@ components:
                     example: My Instance
                 repositoryName:
                     type: string
-                    example: Placeat nisi velit quod architecto excepturi.
+                    example: abc123
                 templateDetail:
                     $ref: '#/components/schemas/TemplateBase'
                 templateId:
                     type: string
-                    example: Non alias at qui blanditiis in.
+                    example: abc123
                 updated:
                     $ref: '#/components/schemas/ChangeInfo'
                 version:
                     type: string
-                    example: Dolor laborum ratione ut.
+                    example: abc123
                 versionDetail:
                     $ref: '#/components/schemas/VersionDetail'
             example:
@@ -2403,18 +2798,15 @@ components:
                     - componentId: keboola.ex-db-mysql
                       configId: "7954825835"
                       name: My Extractor
-                    - componentId: keboola.ex-db-mysql
-                      configId: "7954825835"
-                      name: My Extractor
                 created:
                     date: "2022-04-28T14:20:04+00:00"
                     tokenId: "245941"
-                instanceId: Voluptas cupiditate ut.
+                instanceId: V1StGXR8IZ5jdHi6BAmyT
                 mainConfig:
                     componentId: keboola.orchestrator
                     configId: "7954825835"
                 name: My Instance
-                repositoryName: Excepturi veritatis inventore ex aut ut.
+                repositoryName: abc123
                 templateDetail:
                     author:
                         name: Keboola
@@ -2422,13 +2814,13 @@ components:
                     defaultVersion: v1.2.3
                     deprecated: false
                     description: Full workflow to load all user accounts from the Service.
-                    id: c
+                    id: my-template
                     name: My Template
-                templateId: Voluptas quisquam.
+                templateId: abc123
                 updated:
                     date: "2022-04-28T14:20:04+00:00"
                     tokenId: "245941"
-                version: Et repellendus omnis.
+                version: abc123
                 versionDetail:
                     exampleversiondata:
                         version: v1.2.3
@@ -2451,6 +2843,46 @@ components:
                 - templateDetail
                 - versionDetail
                 - configurations
+        InstanceInputsRequest:
+            type: object
+            properties:
+                branch:
+                    type: string
+                    description: ID of the branch. Use "default" for default branch.
+                    example: default
+                instanceId:
+                    type: string
+                    description: ID of the template instance.
+                    example: V1StGXR8IZ5jdHi6BAmyT
+                version:
+                    type: string
+                    description: Semantic version of the template. Use "default" for default version.
+                    example: v1.2.3
+            example:
+                branch: default
+                instanceId: V1StGXR8IZ5jdHi6BAmyT
+                version: v1.2.3
+            required:
+                - version
+                - instanceId
+                - branch
+        InstanceRequest:
+            type: object
+            properties:
+                branch:
+                    type: string
+                    description: ID of the branch. Use "default" for default branch.
+                    example: default
+                instanceId:
+                    type: string
+                    description: ID of the template instance.
+                    example: V1StGXR8IZ5jdHi6BAmyT
+            example:
+                branch: default
+                instanceId: V1StGXR8IZ5jdHi6BAmyT
+            required:
+                - instanceId
+                - branch
         Instances:
             type: object
             properties:
@@ -2461,93 +2893,42 @@ components:
                     description: All instances found in branch.
                     example:
                         - branch: "5876"
+                          configurations:
+                            - componentId: keboola.ex-db-mysql
+                              configId: "7954825835"
+                              name: My Extractor
                           created:
                             date: "2022-04-28T14:20:04+00:00"
                             tokenId: "245941"
-                          instanceId: Temporibus praesentium explicabo laudantium.
+                          instanceId: V1StGXR8IZ5jdHi6BAmyT
                           mainConfig:
                             componentId: keboola.orchestrator
                             configId: "7954825835"
                           name: My Instance
                           repositoryName: keboola
-                          templateId: "9"
+                          templateId: my-template
                           updated:
                             date: "2022-04-28T14:20:04+00:00"
                             tokenId: "245941"
                           version: v1.1.0
-                        - branch: "5876"
-                          created:
-                            date: "2022-04-28T14:20:04+00:00"
-                            tokenId: "245941"
-                          instanceId: Temporibus praesentium explicabo laudantium.
-                          mainConfig:
-                            componentId: keboola.orchestrator
-                            configId: "7954825835"
-                          name: My Instance
-                          repositoryName: keboola
-                          templateId: "9"
-                          updated:
-                            date: "2022-04-28T14:20:04+00:00"
-                            tokenId: "245941"
-                          version: v1.1.0
+            description: List of the instances.
             example:
                 instances:
                     - branch: "5876"
+                      configurations:
+                        - componentId: keboola.ex-db-mysql
+                          configId: "7954825835"
+                          name: My Extractor
                       created:
                         date: "2022-04-28T14:20:04+00:00"
                         tokenId: "245941"
-                      instanceId: Temporibus praesentium explicabo laudantium.
+                      instanceId: V1StGXR8IZ5jdHi6BAmyT
                       mainConfig:
                         componentId: keboola.orchestrator
                         configId: "7954825835"
                       name: My Instance
                       repositoryName: keboola
-                      templateId: "9"
-                      updated:
-                        date: "2022-04-28T14:20:04+00:00"
-                        tokenId: "245941"
-                      version: v1.1.0
-                    - branch: "5876"
-                      created:
-                        date: "2022-04-28T14:20:04+00:00"
-                        tokenId: "245941"
-                      instanceId: Temporibus praesentium explicabo laudantium.
-                      mainConfig:
-                        componentId: keboola.orchestrator
-                        configId: "7954825835"
-                      name: My Instance
-                      repositoryName: keboola
-                      templateId: "9"
-                      updated:
-                        date: "2022-04-28T14:20:04+00:00"
-                        tokenId: "245941"
-                      version: v1.1.0
-                    - branch: "5876"
-                      created:
-                        date: "2022-04-28T14:20:04+00:00"
-                        tokenId: "245941"
-                      instanceId: Temporibus praesentium explicabo laudantium.
-                      mainConfig:
-                        componentId: keboola.orchestrator
-                        configId: "7954825835"
-                      name: My Instance
-                      repositoryName: keboola
-                      templateId: "9"
-                      updated:
-                        date: "2022-04-28T14:20:04+00:00"
-                        tokenId: "245941"
-                      version: v1.1.0
-                    - branch: "5876"
-                      created:
-                        date: "2022-04-28T14:20:04+00:00"
-                        tokenId: "245941"
-                      instanceId: Temporibus praesentium explicabo laudantium.
-                      mainConfig:
-                        componentId: keboola.orchestrator
-                        configId: "7954825835"
-                      name: My Instance
-                      repositoryName: keboola
-                      templateId: "9"
+                      templateId: my-template
                       updated:
                         date: "2022-04-28T14:20:04+00:00"
                         tokenId: "245941"
@@ -2572,6 +2953,162 @@ components:
             required:
                 - componentId
                 - configId
+        ProjectLockedError:
+            type: object
+            properties:
+                error:
+                    type: string
+                    description: Name of error.
+                    example: templates.internalError
+                message:
+                    type: string
+                    description: Error message.
+                    example: The project is locked, another operation is in progress, please try again later.
+                retryAfter:
+                    type: string
+                    description: Indicates how long the user agent should wait before making a follow-up request.
+                    example: <http-date>/<delay-seconds>
+                statusCode:
+                    type: integer
+                    description: HTTP status code.
+                    example: 503
+                    format: int64
+            description: Project locked error
+            example:
+                error: templates.internalError
+                message: The project is locked, another operation is in progress, please try again later.
+                retryAfter: <http-date>/<delay-seconds>
+                statusCode: 503
+            required:
+                - statusCode
+                - error
+                - message
+                - retryAfter
+        ProjectLockedError2:
+            type: object
+            properties:
+                error:
+                    type: string
+                    description: Name of error.
+                    example: templates.internalError
+                message:
+                    type: string
+                    description: Error message.
+                    example: The project is locked, another operation is in progress, please try again later.
+                statusCode:
+                    type: integer
+                    description: HTTP status code.
+                    example: 503
+                    format: int64
+            description: Access to branch metadata must be atomic, so only one write operation can run at a time. If this error occurs, the client should make retries, see Retry-After header.
+            example:
+                statusCode: 503
+                error: templates.projectLocked
+                message: The project is locked, another operation is in progress, please try again later.
+            required:
+                - statusCode
+                - error
+                - message
+        ProjectLockedError3:
+            type: object
+            properties:
+                error:
+                    type: string
+                    description: Name of error.
+                    example: templates.internalError
+                message:
+                    type: string
+                    description: Error message.
+                    example: The project is locked, another operation is in progress, please try again later.
+                statusCode:
+                    type: integer
+                    description: HTTP status code.
+                    example: 503
+                    format: int64
+            description: Access to branch metadata must be atomic, so only one write operation can run at a time. If this error occurs, the client should make retries, see Retry-After header.
+            example:
+                statusCode: 503
+                error: templates.projectLocked
+                message: The project is locked, another operation is in progress, please try again later.
+            required:
+                - statusCode
+                - error
+                - message
+        ProjectLockedError4:
+            type: object
+            properties:
+                error:
+                    type: string
+                    description: Name of error.
+                    example: templates.internalError
+                message:
+                    type: string
+                    description: Error message.
+                    example: The project is locked, another operation is in progress, please try again later.
+                statusCode:
+                    type: integer
+                    description: HTTP status code.
+                    example: 503
+                    format: int64
+            description: Access to branch metadata must be atomic, so only one write operation can run at a time. If this error occurs, the client should make retries, see Retry-After header.
+            example:
+                statusCode: 503
+                error: templates.projectLocked
+                message: The project is locked, another operation is in progress, please try again later.
+            required:
+                - statusCode
+                - error
+                - message
+        ProjectLockedError5:
+            type: object
+            properties:
+                error:
+                    type: string
+                    description: Name of error.
+                    example: templates.internalError
+                message:
+                    type: string
+                    description: Error message.
+                    example: The project is locked, another operation is in progress, please try again later.
+                statusCode:
+                    type: integer
+                    description: HTTP status code.
+                    example: 503
+                    format: int64
+            description: Access to branch metadata must be atomic, so only one write operation can run at a time. If this error occurs, the client should make retries, see Retry-After header.
+            example:
+                statusCode: 503
+                error: templates.projectLocked
+                message: The project is locked, another operation is in progress, please try again later.
+            required:
+                - statusCode
+                - error
+                - message
+        ProjectLockedError6:
+            type: object
+            properties:
+                error:
+                    type: string
+                    description: Name of error.
+                    example: templates.internalError
+                message:
+                    type: string
+                    description: Error message.
+                    example: The project is locked, another operation is in progress, please try again later.
+                statusCode:
+                    type: integer
+                    description: HTTP status code.
+                    example: 503
+                    format: int64
+            description: Access to branch metadata must be atomic, so only one write operation can run at a time. If this error occurs, the client should make retries, see Retry-After header.
+            example:
+                statusCode: 503
+                error: templates.projectLocked
+                message: The project is locked, another operation is in progress, please try again later.
+            required:
+                - statusCode
+                - error
+                - message
         Repositories:
             type: object
             properties:
@@ -2587,6 +3124,7 @@ components:
                           author:
                             name: Keboola
                             url: https://www.keboola.com
+            description: List of the repositories.
             example:
                 repositories:
                     - name: keboola
@@ -2631,6 +3169,17 @@ components:
                 - url
                 - ref
                 - author
+        RepositoryRequest:
+            type: object
+            properties:
+                repository:
+                    type: string
+                    description: Name of the template repository. Use "keboola" for default Keboola repository.
+                    example: keboola
+            example:
+                repository: keboola
+            required:
+                - repository
         ServiceDetail:
             type: object
             properties:
@@ -2642,6 +3191,7 @@ components:
                     type: string
                     description: URL of the API documentation.
                     example: https://templates.keboola.com/v1/documentation
+            description: Information about the service
             example:
                 api: templates
                 documentation: https://templates.keboola.com/v1/documentation
@@ -3068,39 +3618,7 @@ components:
                             - error: API token cannot be empty.
                               id: api-token
                               visible: true
-                            - error: API token cannot be empty.
-                              id: api-token
-                              visible: true
-                            - error: API token cannot be empty.
-                              id: api-token
-                              visible: true
-                          valid: true
-                        - configured: false
-                          id: g01-s01
-                          inputs:
-                            - error: API token cannot be empty.
-                              id: api-token
-                              visible: true
-                            - error: API token cannot be empty.
-                              id: api-token
-                              visible: true
-                            - error: API token cannot be empty.
-                              id: api-token
-                              visible: true
-                          valid: true
-                        - configured: false
-                          id: g01-s01
-                          inputs:
-                            - error: API token cannot be empty.
-                              id: api-token
-                              visible: true
-                            - error: API token cannot be empty.
-                              id: api-token
-                              visible: true
-                            - error: API token cannot be empty.
-                              id: api-token
-                              visible: true
-                          valid: true
+                          valid: false
                 valid:
                     type: boolean
                     description: True if the required number of steps is configured and all inputs are valid.
@@ -3116,52 +3634,7 @@ components:
                         - error: API token cannot be empty.
                           id: api-token
                           visible: true
-                        - error: API token cannot be empty.
-                          id: api-token
-                          visible: true
-                        - error: API token cannot be empty.
-                          id: api-token
-                          visible: true
-                      valid: true
-                    - configured: false
-                      id: g01-s01
-                      inputs:
-                        - error: API token cannot be empty.
-                          id: api-token
-                          visible: true
-                        - error: API token cannot be empty.
-                          id: api-token
-                          visible: true
-                        - error: API token cannot be empty.
-                          id: api-token
-                          visible: true
-                      valid: true
-                    - configured: false
-                      id: g01-s01
-                      inputs:
-                        - error: API token cannot be empty.
-                          id: api-token
-                          visible: true
-                        - error: API token cannot be empty.
-                          id: api-token
-                          visible: true
-                        - error: API token cannot be empty.
-                          id: api-token
-                          visible: true
-                      valid: true
-                    - configured: false
-                      id: g01-s01
-                      inputs:
-                        - error: API token cannot be empty.
-                          id: api-token
-                          visible: true
-                        - error: API token cannot be empty.
-                          id: api-token
-                          visible: true
-                        - error: API token cannot be empty.
-                          id: api-token
-                          visible: true
-                      valid: true
+                      valid: false
                 valid: false
             required:
                 - id
@@ -3202,7 +3675,7 @@ components:
                 configured:
                     type: boolean
                     description: True if the step was part of the sent payload.
-                    example: true
+                    example: false
                 id:
                     type: string
                     description: Step ID.
@@ -3216,24 +3689,15 @@ components:
                         - error: API token cannot be empty.
                           id: api-token
                           visible: true
-                        - error: API token cannot be empty.
-                          id: api-token
-                          visible: true
                 valid:
                     type: boolean
                     description: True if all inputs in the step are valid.
-                    example: true
+                    example: false
             description: Validation Detail of the step.
             example:
-                configured: true
+                configured: false
                 id: g01-s01
                 inputs:
-                    - error: API token cannot be empty.
-                      id: api-token
-                      visible: true
-                    - error: API token cannot be empty.
-                      id: api-token
-                      visible: true
                     - error: API token cannot be empty.
                       id: api-token
                       visible: true
@@ -3258,7 +3722,7 @@ components:
                     format: int64
                 error:
                     type: string
-                    example: Est suscipit quia ab qui molestias architecto.
+                    example: abc123
                 finishedAt:
                     type: string
                     description: Date and time of the task end.
@@ -3266,7 +3730,8 @@ components:
                     format: date-time
                 id:
                     type: string
-                    example: Molestiae eos sed deleniti occaecati dignissimos.
+                    description: Unique ID of the task.
+                    example: task_1234
                 isFinished:
                     type: boolean
                     description: Shortcut for status != "processing".
@@ -3275,11 +3740,11 @@ components:
                     $ref: '#/components/schemas/TaskOutputs'
                 result:
                     type: string
-                    example: Qui qui.
+                    example: abc123
                 status:
                     type: string
                     description: 'Task status, one of: processing, success, error'
-                    example: processing
+                    example: success
                     enum:
                         - processing
                         - success
@@ -3287,11 +3752,12 @@ components:
                 type:
                     type: string
                     description: Task type.
-                    example: Vitae blanditiis dolorem.
+                    example: abc123
                 url:
                     type: string
                     description: URL of the task.
-                    example: Saepe et nulla quis iste placeat reiciendis.
+                    example: abc123
+            description: An asynchronous task.
             example:
                 id: task-1
                 url: https://templates.keboola.com/v1/tasks/template.use/2018-01-01T00:00:00.000Z_dIklP
@@ -3313,13 +3779,18 @@ components:
         TaskOutputs:
             type: object
             properties:
+                configId:
+                    type: string
+                    description: Config ID of the configuration created by preview.
+                    example: "123456"
                 instanceId:
                     type: string
-                    description: ID of the created/updated template instance.
-                    example: Nihil ut nulla quasi voluptatibus vel aut.
+                    description: ID of the template instance.
+                    example: V1StGXR8IZ5jdHi6BAmyT
             description: Outputs generated by the task.
             example:
-                instanceId: Corrupti facere consequuntur placeat ipsa dolor explicabo.
+                configId: "123456"
+                instanceId: V1StGXR8IZ5jdHi6BAmyT
         Template:
             type: object
             properties:
@@ -3329,7 +3800,7 @@ components:
                     type: array
                     items:
                         type: string
-                        example: Provident neque ipsam.
+                        example: abc123
                     description: List of categories the template belongs to.
                     example:
                         - E-commerce
@@ -3339,7 +3810,7 @@ components:
                     type: array
                     items:
                         type: string
-                        example: Unde adipisci.
+                        example: abc123
                     description: List of components used in the template.
                     example:
                         - ex-generic-v2
@@ -3362,7 +3833,8 @@ components:
                     maxLength: 200
                 id:
                     type: string
-                    example: "n"
+                    description: ID of the template.
+                    example: my-template
                     minLength: 1
                     maxLength: 40
                 name:
@@ -3402,9 +3874,9 @@ components:
                     - ex-generic-v2
                     - keboola.snowflake-transformation
                 defaultVersion: v1.2.3
-                deprecated: true
+                deprecated: false
                 description: Full workflow to load all user accounts from the Service.
-                id: "95"
+                id: my-template
                 name: My Template
                 versions:
                     - version: v0.1.1
@@ -3452,7 +3924,8 @@ components:
                     maxLength: 200
                 id:
                     type: string
-                    example: m
+                    description: ID of the template.
+                    example: my-template
                     minLength: 1
                     maxLength: 40
                 name:
@@ -3469,7 +3942,7 @@ components:
                 defaultVersion: v1.2.3
                 deprecated: false
                 description: Full workflow to load all user accounts from the Service.
-                id: sf
+                id: my-template
                 name: My Template
             required:
                 - id
@@ -3487,7 +3960,7 @@ components:
                     type: array
                     items:
                         type: string
-                        example: Impedit vel consequatur aut deserunt veritatis.
+                        example: abc123
                     description: List of categories the template belongs to.
                     example:
                         - E-commerce
@@ -3497,7 +3970,7 @@ components:
                     type: array
                     items:
                         type: string
-                        example: Voluptatem aliquid blanditiis sit suscipit delectus.
+                        example: abc123
                     description: List of components used in the template.
                     example:
                         - ex-generic-v2
@@ -3520,7 +3993,8 @@ components:
                     maxLength: 200
                 id:
                     type: string
-                    example: ah
+                    description: ID of the template.
+                    example: my-template
                     minLength: 1
                     maxLength: 40
                 name:
@@ -3597,6 +4071,50 @@ components:
                 - categories
                 - components
                 - versions
+        TemplateRequest:
+            type: object
+            properties:
+                repository:
+                    type: string
+                    description: Name of the template repository. Use "keboola" for default Keboola repository.
+                    example: keboola
+                template:
+                    type: string
+                    description: ID of the template.
+                    example: my-template
+                    minLength: 1
+                    maxLength: 40
+            example:
+                repository: keboola
+                template: my-template
+            required:
+                - template
+                - repository
+        TemplateVersionRequest:
+            type: object
+            properties:
+                repository:
+                    type: string
+                    description: Name of the template repository. Use "keboola" for default Keboola repository.
+                    example: keboola
+                template:
+                    type: string
+                    description: ID of the template.
+                    example: my-template
+                    minLength: 1
+                    maxLength: 40
+                version:
+                    type: string
+                    description: Semantic version of the template. Use "default" for default version.
+                    example: v1.2.3
+            example:
+                repository: keboola
+                template: my-template
+                version: v1.2.3
+            required:
+                - version
+                - template
+                - repository
         Templates:
             type: object
             properties:
@@ -3619,9 +4137,9 @@ components:
                             - ex-generic-v2
                             - keboola.snowflake-transformation
                           defaultVersion: v1.2.3
-                          deprecated: true
+                          deprecated: false
                           description: Full workflow to load all user accounts from the Service.
-                          id: "9"
+                          id: my-template
                           name: My Template
                           versions:
                             - version: v0.1.1
@@ -3636,62 +4154,7 @@ components:
                             - version: v2.0.0
                               stable: false
                               description: Experimental support for new API.
-                        - author:
-                            name: Keboola
-                            url: https://www.keboola.com
-                          categories:
-                            - E-commerce
-                            - Other
-                            - Social Media
-                          components:
-                            - ex-generic-v2
-                            - keboola.snowflake-transformation
-                          defaultVersion: v1.2.3
-                          deprecated: true
-                          description: Full workflow to load all user accounts from the Service.
-                          id: "9"
-                          name: My Template
-                          versions:
-                            - version: v0.1.1
-                              stable: false
-                              description: Initial version.
-                            - version: v1.1.1
-                              stable: true
-                              description: ""
-                            - version: v1.2.3
-                              stable: true
-                              description: ""
-                            - version: v2.0.0
-                              stable: false
-                              description: Experimental support for new API.
-                        - author:
-                            name: Keboola
-                            url: https://www.keboola.com
-                          categories:
-                            - E-commerce
-                            - Other
-                            - Social Media
-                          components:
-                            - ex-generic-v2
-                            - keboola.snowflake-transformation
-                          defaultVersion: v1.2.3
-                          deprecated: true
-                          description: Full workflow to load all user accounts from the Service.
-                          id: "9"
-                          name: My Template
-                          versions:
-                            - version: v0.1.1
-                              stable: false
-                              description: Initial version.
-                            - version: v1.1.1
-                              stable: true
-                              description: ""
-                            - version: v1.2.3
-                              stable: true
-                              description: ""
-                            - version: v2.0.0
-                              stable: false
-                              description: Experimental support for new API.
+            description: List of the templates.
             example:
                 repository:
                     name: keboola
@@ -3751,6 +4214,45 @@ components:
             required:
                 - repository
                 - templates
+        TemplatesRequest:
+            type: object
+            properties:
+                filter:
+                    type: string
+                    description: The 'filter' attribute specifies the category of templates to retrieve from the repository.
+                    example: keboola.data-apps
+                repository:
+                    type: string
+                    description: Name of the template repository. Use "keboola" for default Keboola repository.
+                    example: keboola
+            example:
+                filter: keboola.data-apps
+                repository: keboola
+            required:
+                - repository
+        UpdateInstanceRequest:
+            type: object
+            properties:
+                branch:
+                    type: string
+                    description: ID of the branch. Use "default" for default branch.
+                    example: default
+                instanceId:
+                    type: string
+                    description: ID of the template instance.
+                    example: V1StGXR8IZ5jdHi6BAmyT
+                name:
+                    type: string
+                    description: New name of the instance.
+                    example: My Great Instance
+            example:
+                branch: default
+                instanceId: V1StGXR8IZ5jdHi6BAmyT
+                name: My Great Instance
+            required:
+                - name
+                - instanceId
+                - branch
         UpdateInstanceRequestBody:
             type: object
             properties:
@@ -3762,6 +4264,106 @@ components:
                 name: My Great Instance
             required:
                 - name
+        UpgradeInstanceRequest:
+            type: object
+            properties:
+                branch:
+                    type: string
+                    description: ID of the branch. Use "default" for default branch.
+                    example: default
+                instanceId:
+                    type: string
+                    description: ID of the template instance.
+                    example: V1StGXR8IZ5jdHi6BAmyT
+                steps:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/StepPayload'
+                    description: Steps with input values filled in by user.
+                    example:
+                        - id: g01-s01
+                          inputs:
+                            - id: user
+                              value: user@example.com
+                            - id: api-token
+                              value: "123456"
+                version:
+                    type: string
+                    description: Semantic version of the template. Use "default" for default version.
+                    example: v1.2.3
+            example:
+                branch: default
+                instanceId: V1StGXR8IZ5jdHi6BAmyT
+                steps:
+                    - id: g01-s01
+                      inputs:
+                        - id: user
+                          value: user@example.com
+                        - id: api-token
+                          value: "123456"
+                version: v1.2.3
+            required:
+                - version
+                - instanceId
+                - branch
+                - steps
+        UseTemplateRequest:
+            type: object
+            properties:
+                branch:
+                    type: string
+                    description: ID of the branch. Use "default" for default branch.
+                    example: default
+                name:
+                    type: string
+                    description: Name of the new template instance.
+                    example: My Instance
+                repository:
+                    type: string
+                    description: Name of the template repository. Use "keboola" for default Keboola repository.
+                    example: keboola
+                steps:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/StepPayload'
+                    description: Steps with input values filled in by user.
+                    example:
+                        - id: g01-s01
+                          inputs:
+                            - id: user
+                              value: user@example.com
+                            - id: api-token
+                              value: "123456"
+                template:
+                    type: string
+                    description: ID of the template.
+                    example: my-template
+                    minLength: 1
+                    maxLength: 40
+                version:
+                    type: string
+                    description: Semantic version of the template. Use "default" for default version.
+                    example: v1.2.3
+            example:
+                branch: default
+                name: My Instance
+                repository: keboola
+                steps:
+                    - id: g01-s01
+                      inputs:
+                        - id: user
+                          value: user@example.com
+                        - id: api-token
+                          value: "123456"
+                template: my-template
+                version: v1.2.3
+            required:
+                - name
+                - branch
+                - version
+                - template
+                - repository
+                - steps
         UseTemplateVersionRequestBody:
             type: object
             properties:
@@ -3799,9 +4401,13 @@ components:
                 - name
                 - branch
                 - steps
-        ValidateInputsRequestBody:
+        ValidateInputsRequest:
             type: object
             properties:
+                repository:
+                    type: string
+                    description: Name of the template repository. Use "keboola" for default Keboola repository.
+                    example: keboola
                 steps:
                     type: array
                     items:
@@ -3814,7 +4420,18 @@ components:
                               value: user@example.com
                             - id: api-token
                               value: "123456"
+                template:
+                    type: string
+                    description: ID of the template.
+                    example: my-template
+                    minLength: 1
+                    maxLength: 40
+                version:
+                    type: string
+                    description: Semantic version of the template. Use "default" for default version.
+                    example: v1.2.3
             example:
+                repository: keboola
                 steps:
                     - id: g01-s01
                       inputs:
@@ -3822,7 +4439,12 @@ components:
                           value: user@example.com
                         - id: api-token
                           value: "123456"
+                template: my-template
+                version: v1.2.3
             required:
+                - version
+                - template
+                - repository
                 - steps
         ValidationError:
             type: object
@@ -3837,7 +4459,6 @@ components:
                     type: string
                     description: Error message.
                     example: Inputs are not valid.
-            description: Inputs are not valid.
             example:
                 ValidationResult:
                     valid: false
@@ -3895,86 +4516,7 @@ components:
                                 - error: API token cannot be empty.
                                   id: api-token
                                   visible: true
-                                - error: API token cannot be empty.
-                                  id: api-token
-                                  visible: true
-                                - error: API token cannot be empty.
-                                  id: api-token
-                                  visible: true
-                              valid: true
-                            - configured: false
-                              id: g01-s01
-                              inputs:
-                                - error: API token cannot be empty.
-                                  id: api-token
-                                  visible: true
-                                - error: API token cannot be empty.
-                                  id: api-token
-                                  visible: true
-                                - error: API token cannot be empty.
-                                  id: api-token
-                                  visible: true
-                              valid: true
-                          valid: false
-                        - error: All steps must be configured.
-                          id: g01
-                          steps:
-                            - configured: false
-                              id: g01-s01
-                              inputs:
-                                - error: API token cannot be empty.
-                                  id: api-token
-                                  visible: true
-                                - error: API token cannot be empty.
-                                  id: api-token
-                                  visible: true
-                                - error: API token cannot be empty.
-                                  id: api-token
-                                  visible: true
-                              valid: true
-                            - configured: false
-                              id: g01-s01
-                              inputs:
-                                - error: API token cannot be empty.
-                                  id: api-token
-                                  visible: true
-                                - error: API token cannot be empty.
-                                  id: api-token
-                                  visible: true
-                                - error: API token cannot be empty.
-                                  id: api-token
-                                  visible: true
-                              valid: true
-                          valid: false
-                        - error: All steps must be configured.
-                          id: g01
-                          steps:
-                            - configured: false
-                              id: g01-s01
-                              inputs:
-                                - error: API token cannot be empty.
-                                  id: api-token
-                                  visible: true
-                                - error: API token cannot be empty.
-                                  id: api-token
-                                  visible: true
-                                - error: API token cannot be empty.
-                                  id: api-token
-                                  visible: true
-                              valid: true
-                            - configured: false
-                              id: g01-s01
-                              inputs:
-                                - error: API token cannot be empty.
-                                  id: api-token
-                                  visible: true
-                                - error: API token cannot be empty.
-                                  id: api-token
-                                  visible: true
-                                - error: API token cannot be empty.
-                                  id: api-token
-                                  visible: true
-                              valid: true
+                              valid: false
                           valid: false
                 valid:
                     type: boolean
@@ -4051,7 +4593,7 @@ components:
                     type: array
                     items:
                         type: string
-                        example: Omnis odit et sit sed nisi.
+                        example: abc123
                     description: List of components used in the template version.
                     example:
                         - ex-generic-v2
@@ -4106,7 +4648,7 @@ components:
                     type: array
                     items:
                         type: string
-                        example: Et et.
+                        example: abc123
                     description: List of components used in the template version.
                     example:
                         - ex-generic-v2

@@ -9,10 +9,12 @@ import (
 	"github.com/keboola/go-utils/pkg/orderedmap"
 	"github.com/spf13/cast"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/env"
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem"
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem/aferofs"
+	"github.com/keboola/keboola-as-code/internal/pkg/log"
 	"github.com/keboola/keboola-as-code/internal/pkg/model"
 	"github.com/keboola/keboola-as-code/internal/pkg/naming"
 	"github.com/keboola/keboola-as-code/internal/pkg/project"
@@ -26,9 +28,12 @@ import (
 
 func TestLoadState(t *testing.T) {
 	t.Parallel()
-	testProject := testproject.GetTestProjectForTest(t)
+
+	ctx := context.Background()
+
+	testProject := testproject.GetTestProjectForTest(t, "")
 	err := testProject.SetState("minimal.json")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	envs := testProject.Env()
 
 	// Same IDs in local and remote state
@@ -39,7 +44,7 @@ func TestLoadState(t *testing.T) {
 
 	// Container
 	m, fs := loadTestManifest(t, envs, "minimal")
-	d := dependencies.NewMocked(t, dependencies.WithTestProject(testProject))
+	d := dependencies.NewMocked(t, ctx, dependencies.WithTestProject(testProject))
 
 	// Load
 	options := LoadOptions{
@@ -47,13 +52,13 @@ func TestLoadState(t *testing.T) {
 		LoadRemoteState: true,
 	}
 	state, err := New(context.Background(), project.NewWithManifest(context.Background(), fs, m), d)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	ok, localErr, remoteErr := state.Load(context.Background(), options)
 
 	// Check errors
 	assert.True(t, ok)
-	assert.NoError(t, localErr)
-	assert.NoError(t, remoteErr)
+	require.NoError(t, localErr)
+	require.NoError(t, remoteErr)
 
 	// Check results
 	assert.Equal(t, []*model.BranchState{
@@ -164,11 +169,12 @@ func loadTestManifest(t *testing.T, envs *env.Map, localState string) (*projectM
 
 	// Create Fs
 	fs := aferofs.NewMemoryFsFrom(stateDir)
-	testhelper.MustReplaceEnvsDir(fs, `/`, envs)
+	err := testhelper.ReplaceEnvsDir(context.Background(), fs, `/`, envs)
+	require.NoError(t, err)
 
 	// Load manifest
-	m, err := projectManifest.Load(fs, false)
-	assert.NoError(t, err)
+	m, err := projectManifest.Load(context.Background(), log.NewNopLogger(), fs, env.Empty(), false)
+	require.NoError(t, err)
 
 	return m, fs
 }

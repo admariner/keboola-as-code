@@ -1,6 +1,8 @@
 package service
 
 import (
+	"context"
+
 	. "github.com/keboola/keboola-as-code/internal/pkg/service/common/errors"
 	. "github.com/keboola/keboola-as-code/internal/pkg/service/templates/api/gen/templates"
 	"github.com/keboola/keboola-as-code/internal/pkg/template"
@@ -8,13 +10,13 @@ import (
 	"github.com/keboola/keboola-as-code/internal/pkg/utils/strhelper"
 )
 
-func validateInputs(groups template.StepsGroups, payload []*StepPayload) (out *ValidationResult, allValues template.InputsValues, err error) {
+func validateInputs(ctx context.Context, groups template.StepsGroups, payload []*StepPayload) (out *ValidationResult, allValues template.InputsValues, err error) {
 	out = &ValidationResult{Valid: true}
 	stepInputs := inputsPayloadToMap(payload)
 
 	errs := errors.NewMultiError()
 	allValues = make(template.InputsValues, 0)
-	allValuesMap := make(map[string]interface{})
+	allValuesMap := make(map[string]any)
 	allStepsIds := make(map[string]bool)
 
 	// Check each group
@@ -60,7 +62,7 @@ func validateInputs(groups template.StepsGroups, payload []*StepPayload) (out *V
 
 				// Validate value
 				if outInput.Error == nil && outStep.Configured && outInput.Visible {
-					if err := input.ValidateUserInput(value); err != nil {
+					if err := input.ValidateUserInput(ctx, value); err != nil {
 						msg := err.Error()
 
 						// In other parts of the repository, the validation result is a bullet list.
@@ -128,11 +130,11 @@ func validateInputs(groups template.StepsGroups, payload []*StepPayload) (out *V
 }
 
 // inputsPayloadToMap returns map[StepId][InputId] -> value.
-func inputsPayloadToMap(payload []*StepPayload) map[string]map[string]interface{} {
-	v := make(map[string]map[string]interface{})
+func inputsPayloadToMap(payload []*StepPayload) map[string]map[string]any {
+	v := make(map[string]map[string]any)
 	for _, stepPayload := range payload {
 		if _, ok := v[stepPayload.ID]; !ok {
-			v[stepPayload.ID] = make(map[string]interface{})
+			v[stepPayload.ID] = make(map[string]any)
 		}
 		for _, inputPayload := range stepPayload.Inputs {
 			v[stepPayload.ID][inputPayload.ID] = inputPayload.Value

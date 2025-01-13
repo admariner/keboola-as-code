@@ -30,21 +30,21 @@ type Phase struct {
 // ConfigId and ConfigData can be empty if Enabled=false.
 type Task struct {
 	TaskKey
-	AbsPath     `validate:"dive"`
+	AbsPath
 	Name        string `validate:"required"`
 	Enabled     bool
 	ComponentID keboola.ComponentID `validate:"required"`
 	ConfigID    keboola.ConfigID
 	ConfigData  *orderedmap.OrderedMap
-	ConfigPath  string                 // target config path if any
-	Content     *orderedmap.OrderedMap `validate:"dive"`
+	ConfigPath  string // target config path if any
+	Content     *orderedmap.OrderedMap
 }
 
 func (p Phase) String() string {
 	buf := new(bytes.Buffer)
 	_, _ = fmt.Fprintf(buf, "#  %03d %s\n", p.Index+1, p.Name)
 
-	var dependsOn []string
+	dependsOn := make([]string, 0, len(p.DependsOn))
 	for _, dependsOnKey := range p.DependsOn {
 		dependsOn = append(dependsOn, cast.ToString(dependsOnKey.Index+1))
 	}
@@ -62,12 +62,17 @@ func (t Task) String() string {
 	if len(targetConfigDesc) == 0 {
 		targetConfigDesc = fmt.Sprintf(`branch:%d/componentId:%s/configId:%s`, t.BranchID, t.ComponentID, t.ConfigID)
 	}
+
+	// Add field enabled to task.Content
+	content := t.Content.Clone()
+	content.Set("enabled", t.Enabled)
+
 	return fmt.Sprintf(
 		"## %03d %s\n>> %s\n%s",
 		t.Index+1,
 		t.Name,
 		targetConfigDesc,
-		json.MustEncodeString(t.Content, true),
+		json.MustEncodeString(content, true),
 	)
 }
 

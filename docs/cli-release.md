@@ -11,11 +11,27 @@ The release process is handled by [.github/workflows](../.github/workflows).
   - creates mainfest for [Scoop](#scoop)
   - uses [GoReleaser publisher](https://goreleaser.com/customization/publishers/) functionality to upload the generated binaries to [distribution S3](#s3-distribution) 
 
+## MSI Installer
+
+- Exe files for Windows distributed through Winget and Chocolatey have to be bundled in installers
+- [MSBuild](https://docs.microsoft.com/en-us/visualstudio/msbuild/msbuild) with [WiX Toolset](https://wixtoolset.org/) is used
+- The MSI file is created in the `release-msi-windows` step of the [GitHub Workflow](#workflow-steps)
+- The MSI file is uploaded to S3 in the same step
+
+## WinGet
+
+- [WinGet](https://learn.microsoft.com/en-us/windows/package-manager/winget/) is a package manager for Windows by Microsoft
+- The manifest is created using [wingetcreate](https://github.com/microsoft/winget-create) tool and pushed to the repository using `update-repositories-windows` step of the [GitHub Workflow](#workflow-steps)
+- The manifest is published to the official repository
+- [Initial PR](https://github.com/microsoft/winget-pkgs/pull/47486)
+- Our release workflow sends a new PR to [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs/pulls?q=is%3Apr+sort%3Aupdated-desc+Keboola)
+- We need to wait for one of the maintainers to merge the PR, this can take a few days
+- To install Keboola CLI with winget, use `winget install --id=Keboola.KeboolaCLI  -e`
+
 ## macOS
 
 - macOS binaries are signed with an Apple Developer code signing certificate
 - The certificate is issued by Tomas Netrval's Apple Developer account for the time being
-- Packaging and signing of macOS binaries is handled by [gon](https://github.com/mitchellh/gon) from within [build/ci/goreleaser.yml](../build/ci/goreleaser.yml)
 - macOS binaries are distributed using [Homebrew distribution](#homebrew)
 
 ## Homebrew
@@ -25,12 +41,6 @@ The release process is handled by [.github/workflows](../.github/workflows).
 - The manifest is pushed to the repository in the `update-repositories` step of the [GitHub Workflow](#workflow-steps) 
 - We use our own manifest repository located on url https://github.com/keboola/homebrew-keboola-cli
 
-## MSI Installer
-
-- Exe files for Windows distributed through Winget and Chocolatey have to be bundled in installers 
-- [MSBuild](https://docs.microsoft.com/en-us/visualstudio/msbuild/msbuild) with [WiX Toolset](https://wixtoolset.org/) is used
-- The MSI file is created in the `release-msi-windows` step of the [GitHub Workflow](#workflow-steps)
-- The MSI file is uploaded to S3 in the same step
 
 ## Chocolatey
 
@@ -38,6 +48,9 @@ The release process is handled by [.github/workflows](../.github/workflows).
 - The package is created and pushed to the community repository using `update-repositories-windows` step of the [GitHub Workflow](#workflow-steps)
 - The package is published to the community repository: https://community.chocolatey.org/packages/keboola-cli
 - Updates to the package are authenticated by API key stored in `CHOCOLATEY_KEY` secret 
+- Our release workflow sends the new version to Chocolatey which then runs 3 [steps](https://community.chocolatey.org/packages/keboola-cli#testingResults) called "Validation", "Verification" and "Scan"
+- Check the current status on top of the page for the new version which is linked from the [version history](https://community.chocolatey.org/packages/keboola-cli#versionhistory)
+- Sometimes Chocolatey checks may decide that a manual review is necessary which can take longer
 
 ## Scoop
 
@@ -46,12 +59,6 @@ The release process is handled by [.github/workflows](../.github/workflows).
 - The manifest is pushed to the repository in the `update-repositories-windows` step of the [GitHub Workflow](#workflow-steps)
 - We use our own manifest repository (bucket) located on url https://github.com/keboola/scoop-keboola-cli
 
-## WinGet
-
-- [WinGet](https://winget.run/) is a package manager for Windows by Microsoft
-- The manifest is created using [wingetcreate](https://github.com/microsoft/winget-create) tool and pushed to the repository using `update-repositories-windows` step of the [GitHub Workflow](#workflow-steps)
-- The manifest is published to the official repository
-- [Initial PR](https://github.com/microsoft/winget-pkgs/pull/47486)
 
 ## Linux Repositories
 

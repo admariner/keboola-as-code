@@ -2,6 +2,7 @@ package pull
 
 import (
 	"context"
+	"io"
 
 	"github.com/keboola/go-client/pkg/keboola"
 
@@ -21,9 +22,10 @@ type Options struct {
 
 type dependencies interface {
 	Components() *model.ComponentsMap
-	KeboolaProjectAPI() *keboola.API
+	KeboolaProjectAPI() *keboola.AuthorizedAPI
 	Logger() log.Logger
 	Telemetry() telemetry.Telemetry
+	Stdout() io.Writer
 }
 
 func LoadStateOptions() loadState.Options {
@@ -59,11 +61,11 @@ func Run(ctx context.Context, tmpl *template.Template, o Options, d dependencies
 	}
 
 	// Log plan
-	plan.Log(logger)
+	plan.Log(d.Stdout())
 
 	if !plan.Empty() {
 		// Invoke
-		if err := plan.Invoke(logger, templateState.Ctx(), templateState.LocalManager(), templateState.RemoteManager(), ``); err != nil {
+		if err := plan.Invoke(logger, templateState.Ctx(), templateState.LocalManager(), templateState.RemoteManager(), ``); err != nil { // nolint: contextcheck
 			return err
 		}
 
@@ -74,7 +76,7 @@ func Run(ctx context.Context, tmpl *template.Template, o Options, d dependencies
 	}
 
 	if !plan.Empty() {
-		logger.Info("Pull done.")
+		logger.Info(ctx, "Pull done.")
 	}
 
 	return nil

@@ -1,0 +1,11 @@
+%A
+DEBUG	Project state has been successfully loaded.
+DEBUG	Change description: "my change description"
+DEBUG	Validation done.
+Plan for "push" operation:
+  * B main | changed: metadata
+DEBUG	Execution plan is valid.
+%A
+INFO	Push done.
+%A
+DEBUG	Sent "sync-push" successful event id: "%s"

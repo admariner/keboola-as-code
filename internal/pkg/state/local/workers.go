@@ -39,7 +39,7 @@ func NewWorkers(parentCtx context.Context) *Workers {
 	return w
 }
 
-func (w *Workers) AddWorker(worker func() error) {
+func (w *Workers) AddWorker(worker func(ctx context.Context) error) {
 	if w.invoked {
 		panic(`invoked local.Workers cannot be reused`)
 	}
@@ -55,7 +55,7 @@ func (w *Workers) AddWorker(worker func() error) {
 		}
 		defer w.semaphore.Release(1)
 
-		if err := worker(); err != nil {
+		if err := worker(w.ctx); err != nil {
 			w.lock.Lock()
 			defer w.lock.Unlock()
 			w.errors[workerNumber] = err
@@ -81,7 +81,7 @@ func (w *Workers) StartAndWait() error {
 
 	// Collect errors in the same order as workers were defined
 	workersCount := w.workerNum.Load()
-	for i := int64(0); i < workersCount; i++ {
+	for i := range workersCount {
 		if err, ok := w.errors[i]; ok {
 			errs.Append(err)
 		}

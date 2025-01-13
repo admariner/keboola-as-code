@@ -2,6 +2,7 @@ package run
 
 import (
 	"context"
+	"io"
 	"os"
 	"strconv"
 	"time"
@@ -36,6 +37,8 @@ type dependencies interface {
 	Process() *servicectx.Process
 	Logger() log.Logger
 	Telemetry() telemetry.Telemetry
+	Stdout() io.Writer
+	Stderr() io.Writer
 }
 
 func Run(ctx context.Context, tmpl *template.Template, o Options, d dependencies) (err error) {
@@ -48,12 +51,12 @@ func Run(ctx context.Context, tmpl *template.Template, o Options, d dependencies
 	}
 	defer func() {
 		if err := os.RemoveAll(tempDir); err != nil { // nolint: forbidigo
-			d.Logger().Warnf(`cannot remove temp dir "%s": %w`, tempDir, err)
+			d.Logger().Warnf(ctx, `cannot remove temp dir "%s": %w`, tempDir, err)
 		}
 	}()
 
 	// Run through all tests
-	tests, err := tmpl.Tests()
+	tests, err := tmpl.Tests(ctx)
 	if err != nil {
 		return errors.Errorf(`error running tests for template "%s": %w`, tmpl.TemplateID(), err)
 	}
@@ -67,25 +70,25 @@ func Run(ctx context.Context, tmpl *template.Template, o Options, d dependencies
 
 		if !o.RemoteOnly {
 			if o.Verbose {
-				d.Logger().Infof(`%s %s local running`, tmpl.FullName(), test.Name())
+				d.Logger().Infof(ctx, `%s %s local running`, tmpl.FullName(), test.Name())
 			}
 			if err := runLocalTest(ctx, test, tmpl, o.Verbose, d); err != nil {
-				d.Logger().Errorf(`FAIL %s %s local`, tmpl.FullName(), test.Name())
+				d.Logger().Errorf(ctx, `FAIL %s %s local`, tmpl.FullName(), test.Name())
 				errs.AppendWithPrefixf(err, `running local test "%s" for template "%s" failed`, test.Name(), tmpl.TemplateID())
 			} else {
-				d.Logger().Infof(`PASS %s %s local`, tmpl.FullName(), test.Name())
+				d.Logger().Infof(ctx, `PASS %s %s local`, tmpl.FullName(), test.Name())
 			}
 		}
 
 		if !o.LocalOnly {
 			if o.Verbose {
-				d.Logger().Infof(`%s %s remote running`, tmpl.FullName(), test.Name())
+				d.Logger().Infof(ctx, `%s %s remote running`, tmpl.FullName(), test.Name())
 			}
 			if err := runRemoteTest(ctx, test, tmpl, o.Verbose, d); err != nil {
-				d.Logger().Errorf(`FAIL %s %s remote`, tmpl.FullName(), test.Name())
+				d.Logger().Errorf(ctx, `FAIL %s %s remote`, tmpl.FullName(), test.Name())
 				errs.AppendWithPrefixf(err, `running remote test "%s" for template "%s" failed`, test.Name(), tmpl.TemplateID())
 			} else {
-				d.Logger().Infof(`PASS %s %s remote`, tmpl.FullName(), test.Name())
+				d.Logger().Infof(ctx, `PASS %s %s remote`, tmpl.FullName(), test.Name())
 			}
 		}
 	}
@@ -103,19 +106,19 @@ func runLocalTest(ctx context.Context, test *template.Test, tmpl *template.Templ
 		logger = log.NewNopLogger()
 	}
 
-	prjState, testPrj, testDeps, unlockFn, err := tmplTest.PrepareProject(ctx, logger, d.Telemetry(), d.Process(), branchID, false)
+	prjState, testPrj, testDeps, unlockFn, err := tmplTest.PrepareProject(ctx, logger, d.Telemetry(), tmpl.ProjectsFilePath(), d.Stdout(), d.Stderr(), d.Process(), branchID, false)
 	if err != nil {
 		return err
 	}
 	defer unlockFn()
-	d.Logger().Debugf(`Working directory set up.`)
+	d.Logger().Debugf(ctx, `Working directory set up.`)
 
 	// Read inputs and replace env vars
 	inputValues, err := tmplTest.ReadInputValues(ctx, tmpl, test)
 	if err != nil {
 		return err
 	}
-	d.Logger().Debugf(`Inputs prepared.`)
+	d.Logger().Debugf(ctx, `Inputs prepared.`)
 
 	// Use template
 	tmplOpts := useTemplate.Options{
@@ -131,7 +134,7 @@ func runLocalTest(ctx context.Context, test *template.Test, tmpl *template.Templ
 	}
 
 	// Copy expected state and replace ENVs
-	expectedDirFs, err := test.ExpectedOutDir()
+	expectedDirFs, err := test.ExpectedOutDir(ctx)
 	if err != nil {
 		return err
 	}
@@ -140,17 +143,26 @@ func runLocalTest(ctx context.Context, test *template.Test, tmpl *template.Templ
 	replaceEnvs.Set("PROJECT_ID", strconv.Itoa(testPrj.ID()))
 	replaceEnvs.Set("MAIN_BRANCH_ID", strconv.Itoa(branchID))
 	envProvider := storageenvmock.CreateStorageEnvMockTicketProvider(ctx, replaceEnvs)
-	testhelper.MustReplaceEnvsDir(prjState.Fs(), `/`, envProvider)
-	testhelper.MustReplaceEnvsDirWithSeparator(expectedDirFs, `/`, envProvider, "__")
+	err = testhelper.ReplaceEnvsDir(ctx, prjState.Fs(), `/`, envProvider)
+	if err != nil {
+		return err
+	}
+	err = testhelper.ReplaceEnvsDirWithSeparator(ctx, expectedDirFs, `/`, envProvider, "__")
+	if err != nil {
+		return err
+	}
 	// Replace secrets from env vars
 	osEnvs, err := env.FromOs()
 	if err != nil {
 		return err
 	}
-	testhelper.MustReplaceEnvsDirWithSeparator(expectedDirFs, `/`, osEnvs, "##")
+	err = testhelper.ReplaceEnvsDirWithSeparator(ctx, expectedDirFs, `/`, osEnvs, "##")
+	if err != nil {
+		return err
+	}
 
 	// Compare actual and expected dirs
-	return testhelper.DirectoryContentsSame(expectedDirFs, `/`, prjState.Fs(), `/`)
+	return testhelper.DirectoryContentsSame(ctx, expectedDirFs, `/`, prjState.Fs(), `/`)
 }
 
 func runRemoteTest(ctx context.Context, test *template.Test, tmpl *template.Template, verbose bool, d dependencies) error {
@@ -161,12 +173,12 @@ func runRemoteTest(ctx context.Context, test *template.Test, tmpl *template.Temp
 		logger = log.NewNopLogger()
 	}
 
-	prjState, testPrj, testDeps, unlockFn, err := tmplTest.PrepareProject(ctx, logger, d.Telemetry(), d.Process(), 0, true)
+	prjState, testPrj, testDeps, unlockFn, err := tmplTest.PrepareProject(ctx, logger, d.Telemetry(), tmpl.ProjectsFilePath(), d.Stdout(), d.Stderr(), d.Process(), 0, true)
 	if err != nil {
 		return err
 	}
 	defer unlockFn()
-	d.Logger().Debugf(`Working directory set up.`)
+	d.Logger().Debugf(ctx, `Working directory set up.`)
 
 	branchKey := prjState.MainBranch().BranchKey
 
@@ -175,7 +187,7 @@ func runRemoteTest(ctx context.Context, test *template.Test, tmpl *template.Temp
 	if err != nil {
 		return err
 	}
-	d.Logger().Debugf(`Inputs prepared.`)
+	d.Logger().Debugf(ctx, `Inputs prepared.`)
 
 	// Copy remote state to the local
 	for _, objectState := range prjState.All() {
@@ -194,7 +206,7 @@ func runRemoteTest(ctx context.Context, test *template.Test, tmpl *template.Temp
 	}
 
 	// Copy expected state and replace ENVs
-	expectedDirFs, err := test.ExpectedOutDir()
+	expectedDirFs, err := test.ExpectedOutDir(ctx)
 	if err != nil {
 		return err
 	}
@@ -203,14 +215,23 @@ func runRemoteTest(ctx context.Context, test *template.Test, tmpl *template.Temp
 	replaceEnvs.Set("PROJECT_ID", strconv.Itoa(testPrj.ID()))
 	replaceEnvs.Set("MAIN_BRANCH_ID", prjState.MainBranch().ID.String())
 	envProvider := storageenvmock.CreateStorageEnvMockTicketProvider(ctx, replaceEnvs)
-	testhelper.MustReplaceEnvsDir(prjState.Fs(), `/`, envProvider)
-	testhelper.MustReplaceEnvsDirWithSeparator(expectedDirFs, `/`, envProvider, "__")
+	err = testhelper.ReplaceEnvsDir(ctx, prjState.Fs(), `/`, envProvider)
+	if err != nil {
+		return err
+	}
+	err = testhelper.ReplaceEnvsDirWithSeparator(ctx, expectedDirFs, `/`, envProvider, "__")
+	if err != nil {
+		return err
+	}
 	// Replace secrets from env vars
 	osEnvs, err := env.FromOs()
 	if err != nil {
 		return err
 	}
-	testhelper.MustReplaceEnvsDirWithSeparator(expectedDirFs, `/`, osEnvs, "##")
+	err = testhelper.ReplaceEnvsDirWithSeparator(ctx, expectedDirFs, `/`, osEnvs, "##")
+	if err != nil {
+		return err
+	}
 
 	// E2E test
 	// Push the project
@@ -238,7 +259,7 @@ func runRemoteTest(ctx context.Context, test *template.Test, tmpl *template.Temp
 	}
 
 	// Run the mainConfig job
-	api := testPrj.KeboolaProjectAPI()
+	api := testPrj.ProjectAPI()
 	job, err := api.NewCreateJobRequest(tmplInst.MainConfig.ComponentID).WithConfig(tmplInst.MainConfig.ConfigID).Send(ctx)
 	if err != nil {
 		return err

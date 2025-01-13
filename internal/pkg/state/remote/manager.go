@@ -22,7 +22,7 @@ import (
 type Manager struct {
 	state             model.ObjectStates
 	localManager      *local.Manager
-	keboolaProjectAPI *keboola.API
+	keboolaProjectAPI *keboola.AuthorizedAPI
 	mapper            *mapper.Mapper
 }
 
@@ -42,7 +42,7 @@ type UnitOfWork struct {
 	branchesSem *semaphore.Weighted
 }
 
-func NewManager(localManager *local.Manager, keboolaProjectAPI *keboola.API, objects model.ObjectStates, mapper *mapper.Mapper) *Manager {
+func NewManager(localManager *local.Manager, keboolaProjectAPI *keboola.AuthorizedAPI, objects model.ObjectStates, mapper *mapper.Mapper) *Manager {
 	return &Manager{
 		state:             objects,
 		localManager:      localManager,
@@ -237,7 +237,7 @@ func (u *UnitOfWork) SaveObject(objectState model.ObjectState, object model.Obje
 	// Invoke mapper
 	apiObject := deepcopy.Copy(object).(model.Object)
 	recipe := model.NewRemoteSaveRecipe(objectState.Manifest(), apiObject, changedFields)
-	if err := u.mapper.MapBeforeRemoteSave(context.Background(), recipe); err != nil {
+	if err := u.mapper.MapBeforeRemoteSave(u.ctx, recipe); err != nil {
 		u.errors.Append(err)
 		return
 	}

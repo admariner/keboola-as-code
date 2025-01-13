@@ -21,10 +21,12 @@ import (
 	"github.com/keboola/keboola-as-code/internal/pkg/service/cli/cmd/remote"
 	"github.com/keboola/keboola-as-code/internal/pkg/service/cli/cmd/sync"
 	"github.com/keboola/keboola-as-code/internal/pkg/service/cli/cmd/template"
+	"github.com/keboola/keboola-as-code/internal/pkg/service/cli/cmdconfig"
 	"github.com/keboola/keboola-as-code/internal/pkg/service/cli/dependencies"
 	"github.com/keboola/keboola-as-code/internal/pkg/service/cli/dialog"
+	"github.com/keboola/keboola-as-code/internal/pkg/service/cli/flag"
 	"github.com/keboola/keboola-as-code/internal/pkg/service/cli/helpmsg"
-	"github.com/keboola/keboola-as-code/internal/pkg/service/cli/options"
+	"github.com/keboola/keboola-as-code/internal/pkg/service/common/configmap"
 	"github.com/keboola/keboola-as-code/internal/pkg/service/common/servicectx"
 	templateManifest "github.com/keboola/keboola-as-code/internal/pkg/template/manifest"
 	repositoryManifest "github.com/keboola/keboola-as-code/internal/pkg/template/repository/manifest"
@@ -33,7 +35,21 @@ import (
 	versionCheck "github.com/keboola/keboola-as-code/pkg/lib/operation/version/check"
 )
 
-// nolint: gochecknoinits
+const (
+	NonInteractiveOpt  = `non-interactive`
+	StorageAPIHostOpt  = `storage-api-host`
+	StorageAPITokenOpt = `storage-api-token`
+)
+
+type RootFlags struct {
+	Version bool `configKey:"version" configShorthand:"V" configUsage:"print version"`
+}
+
+func DefaultRootFlags() RootFlags {
+	return RootFlags{}
+}
+
+//nolint:gochecknoinits
 func init() {
 	// Disable commands auto-sorting
 	cobra.EnableCommandSorting = false
@@ -78,22 +94,23 @@ type Cmd = cobra.Command
 
 type RootCommand struct {
 	*Cmd
-	logger    log.Logger
-	options   *options.Options
-	fs        filesystem.Fs
-	logFile   *log.File
-	cmdByPath map[string]*cobra.Command
-	aliases   *orderedmap.OrderedMap
+	logger      log.Logger
+	globalFlags flag.GlobalFlags
+	fs          filesystem.Fs
+	logFile     *log.File
+	logFormat   log.LogFormat
+	cmdByPath   map[string]*cobra.Command
+	aliases     *orderedmap.OrderedMap
 }
 
 // NewRootCommand creates parent of all sub-commands.
-func NewRootCommand(stdin io.Reader, stdout io.Writer, stderr io.Writer, envs *env.Map, fsFactory filesystem.Factory) *RootCommand {
+func NewRootCommand(stdin io.Reader, stdout io.Writer, stderr io.Writer, osEnvs *env.Map, fsFactory filesystem.Factory) *RootCommand {
 	// Command definition
 	root := &RootCommand{
-		options:   options.New(),
-		logger:    log.NewMemoryLogger(), // temporary logger, we don't have a path to the log file yet
-		cmdByPath: make(map[string]*cobra.Command),
-		aliases:   orderedmap.New(),
+		logger:      log.NewMemoryLogger(), // temporary logger, we don't have a path to the log file yet
+		cmdByPath:   make(map[string]*cobra.Command),
+		aliases:     orderedmap.New(),
+		globalFlags: flag.DefaultGlobalFlags(),
 	}
 	root.Cmd = &Cmd{
 		Use:               "kbc", // name of the binary
@@ -118,61 +135,68 @@ func NewRootCommand(stdin io.Reader, stdout io.Writer, stderr io.Writer, envs *e
 	root.SetUsageTemplate(helpmsg.Read(`usage`) + "\n")
 
 	// Persistent flags for all sub-commands
-	flags := root.PersistentFlags()
-	flags.SortFlags = true
-	flags.BoolP("help", "h", false, "print help for command")
-	flags.StringP("log-file", "l", "", "path to a log file for details")
-	flags.Bool("non-interactive", false, "disable interactive dialogs")
-	flags.StringP("working-dir", "d", "", "use other working directory")
-	flags.StringP("storage-api-token", "t", "", "storage API token from your project")
-	flags.BoolP("verbose", "v", false, "print details")
-	flags.Bool("verbose-api", false, "log each API request and response")
-	flags.Bool("version-check", true, "checks if there is a newer version of the CLI")
+	configmap.MustGenerateFlags(root.PersistentFlags(), flag.DefaultGlobalFlags())
 
 	// Root command flags
-	root.Flags().SortFlags = true
-	root.Flags().BoolP("version", "V", false, "print version")
+	configmap.MustGenerateFlags(root.Flags(), DefaultRootFlags())
 
 	// Init when flags are parsed
 	p := &dependencies.ProviderRef{}
 	root.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
-		// Create filesystem abstraction
-		var err error
-		workingDir, _ := cmd.Flags().GetString(`working-dir`)
-		root.fs, err = fsFactory(filesystem.WithLogger(root.logger), filesystem.WithWorkingDir(workingDir))
+		// Bind flags - without ENVs from files
+		root.globalFlags = flag.DefaultGlobalFlags()
+		err := cmdconfig.NewBinder(osEnvs, log.NewNopLogger()).Bind(cmd.Context(), cmd.Flags(), args, &root.globalFlags)
 		if err != nil {
 			return err
 		}
 
-		// Load values from flags and envs
-		if err = root.options.Load(root.logger, envs, root.fs, cmd.Flags()); err != nil {
+		// Create filesystem abstraction
+		workingDir := root.globalFlags.WorkingDir.Value
+		root.fs, err = fsFactory(cmd.Context(), filesystem.WithLogger(root.logger), filesystem.WithWorkingDir(workingDir))
+		if err != nil {
+			return err
+		}
+
+		// Load ENVs
+		envs := loadEnvFiles(cmd.Context(), root.logger, osEnvs, root.fs)
+
+		// Bind flags - with ENVs from files
+		root.globalFlags = flag.DefaultGlobalFlags()
+		err = cmdconfig.NewBinder(envs, root.logger).Bind(cmd.Context(), cmd.Flags(), args, &root.globalFlags)
+		if err != nil {
 			return err
 		}
 
 		// Setup logger
 		root.setupLogger()
 		root.fs.SetLogger(root.logger)
-		root.logger.Debug(`Working dir: `, filesystem.Join(root.fs.BasePath(), root.fs.WorkingDir()))
+		root.logger.Debugf(cmd.Context(), `Working dir: %s`, filesystem.Join(root.fs.BasePath(), root.fs.WorkingDir()))
 
 		// Interactive prompt
-		prompt := cli.NewPrompt(os.Stdin, os.Stdout, os.Stderr, root.options.GetBool(options.NonInteractiveOpt))
+		prompt := cli.NewPrompt(os.Stdin, stdout, stderr, root.globalFlags.NonInteractive.Value)
 
 		// Create process abstraction
-		ctx, cancel := context.WithCancel(cmd.Context())
-		proc, err := servicectx.New(ctx, cancel)
-		if err != nil {
-			return err
-		}
+		proc := servicectx.New()
 
 		// Create dependencies provider
-		p.Set(dependencies.NewProvider(ctx, root.logger, proc, root.fs, dialog.New(prompt, root.options), root.options))
+		p.Set(dependencies.NewProvider(
+			cmd.Context(),
+			root.logger,
+			proc,
+			root.fs,
+			dialog.New(prompt),
+			root.globalFlags,
+			envs,
+			stdout,
+			stderr,
+		))
 
 		// Check version
-		if err := versionCheck.Run(ctx, root.options.GetBool("version-check"), p.BaseScope()); err != nil {
+		if err := versionCheck.Run(cmd.Context(), root.globalFlags.VersionCheck.Value, p.BaseScope()); err != nil {
 			// Ignore error, send to logs
-			root.logger.Debugf(`Version check: %s.`, err.Error())
+			root.logger.Debugf(cmd.Context(), `Version check: %s.`, err.Error())
 		} else {
-			root.logger.Debugf(`Version check: successful.`)
+			root.logger.Debug(cmd.Context(), `Version check: successful.`)
 		}
 
 		return nil
@@ -183,8 +207,8 @@ func NewRootCommand(stdin io.Reader, stdout io.Writer, stderr io.Writer, envs *e
 		StatusCommand(p),
 		sync.Commands(p),
 		ci.Commands(p),
-		local.Commands(p, envs),
-		remote.Commands(p, envs),
+		local.Commands(p),
+		remote.Commands(p),
 		dbt.Commands(p),
 		template.Commands(p),
 	)
@@ -241,7 +265,7 @@ func (root *RootCommand) Execute() (exitCode int) {
 
 func (root *RootCommand) listAliases() string {
 	// Join aliases to single line
-	var lines []string
+	lines := make([]string, 0, len(root.aliases.Keys()))
 	var maxLength int
 	for _, cmd := range root.aliases.Keys() {
 		aliasesRaw, _ := root.aliases.Get(cmd)
@@ -302,15 +326,16 @@ func (root *RootCommand) printError(errRaw error) {
 	for _, err := range originalErrs.WrappedErrors() {
 		switch {
 		case errors.As(err, &errDirNotFound):
-			root.logger.Infof(`The path "%s" is %s.`, root.fs.BasePath(), errDirNotFound.Found())
-			if root.CalledAs() == `init` && errDirNotFound.Found() == dependencies.KbcProjectDir {
-				root.logger.Infof(`Please use %s.`, errDirNotFound.Expected())
-				root.logger.Info(`Or synchronize the current directory with the "pull" command.`)
-			} else if errDirNotFound.Expected() == dependencies.KbcProjectDir {
-				root.logger.Infof(`Please change working directory to %s.`, errDirNotFound.Expected())
-				root.logger.Infof(`Or use the "sync init" command in %s.`, dependencies.EmptyDir)
-			} else {
-				root.logger.Infof(`Please use %s.`, errDirNotFound.Expected())
+			root.logger.Infof(root.Context(), `The path "%s" is %s.`, root.fs.BasePath(), errDirNotFound.Found())
+			switch {
+			case root.CalledAs() == `init` && errDirNotFound.Found() == dependencies.KbcProjectDir:
+				root.logger.Infof(root.Context(), `Please use %s.`, errDirNotFound.Expected())
+				root.logger.Info(root.Context(), `Or synchronize the current directory with the "pull" command.`)
+			case errDirNotFound.Expected() == dependencies.KbcProjectDir:
+				root.logger.Infof(root.Context(), `Please change working directory to %s.`, errDirNotFound.Expected())
+				root.logger.Infof(root.Context(), `Or use the "sync init" command in %s.`, dependencies.EmptyDir)
+			default:
+				root.logger.Infof(root.Context(), `Please use %s.`, errDirNotFound.Expected())
 			}
 			if errDirNotFound.Expected() == dependencies.EmptyDir {
 				modifiedErrs.Append(errors.Wrapf(err, "directory is not empty"))
@@ -318,62 +343,67 @@ func (root *RootCommand) printError(errRaw error) {
 				modifiedErrs.Append(errors.Wrapf(err, "neither this nor any parent directory is %s", errDirNotFound.Expected()))
 			}
 		case errors.Is(err, dependencies.ErrProjectManifestNotFound):
-			root.logger.Infof(`Project directory must contain the "%s" file.`, projectManifest.Path())
-			root.logger.Infof(`Please change working directory to a project directory.`)
-			root.logger.Infof(`Or use the "sync init" command in an empty directory.`)
+			root.logger.Infof(root.Context(), `Project directory must contain the "%s" file.`, projectManifest.Path())
+			root.logger.Infof(root.Context(), `Please change working directory to a project directory.`)
+			root.logger.Infof(root.Context(), `Or use the "sync init" command in an empty directory.`)
 			modifiedErrs.Append(errors.Wrapf(err, `none of this and parent directories is project dir`))
 		case errors.Is(err, dependencies.ErrRepositoryManifestNotFound):
-			root.logger.Infof(`Repository directory must contain the "%s" file.`, repositoryManifest.Path())
-			root.logger.Infof(`Please change working directory to a repository directory.`)
-			root.logger.Infof(`Or use the "template repository init" command in an empty directory.`)
+			root.logger.Infof(root.Context(), `Repository directory must contain the "%s" file.`, repositoryManifest.Path())
+			root.logger.Infof(root.Context(), `Please change working directory to a repository directory.`)
+			root.logger.Infof(root.Context(), `Or use the "template repository init" command in an empty directory.`)
 			modifiedErrs.Append(errors.Wrapf(err, `none of this and parent directories is repository dir`))
 		case errors.Is(err, dependencies.ErrTemplateManifestNotFound):
-			root.logger.Infof(`Template directory must contain the "%s" file.`, templateManifest.Path())
-			root.logger.Infof(`You are in the template repository, but not in the template directory.`)
-			root.logger.Infof(`Please change working directory to a template directory, for example "template/v1".`)
-			root.logger.Infof(`Or use the "template create" command.`)
+			root.logger.Infof(root.Context(), `Template directory must contain the "%s" file.`, templateManifest.Path())
+			root.logger.Infof(root.Context(), `You are in the template repository, but not in the template directory.`)
+			root.logger.Infof(root.Context(), `Please change working directory to a template directory, for example "template/v1".`)
+			root.logger.Infof(root.Context(), `Or use the "template create" command.`)
 			modifiedErrs.Append(errors.Wrapf(err, `none of this and parent directories is template dir`))
 		case errors.Is(err, dependencies.ErrMissingStorageAPIHost), errors.Is(err, dialog.ErrMissingStorageAPIHost):
-			modifiedErrs.Append(errors.Wrapf(err, `missing Storage Api host, please use "--%s" flag or ENV variable "%s"`, options.StorageAPIHostOpt, root.options.GetEnvName(options.StorageAPIHostOpt)))
+			modifiedErrs.Append(errors.Wrapf(err, `missing Storage Api host, please use "--%s" flag or ENV variable "%s"`, StorageAPIHostOpt, env.NewNamingConvention(cmdconfig.ENVPrefix).FlagToEnv(StorageAPIHostOpt)))
 		case errors.Is(err, dependencies.ErrMissingStorageAPIToken), errors.Is(err, dialog.ErrMissingStorageAPIToken):
-			modifiedErrs.Append(errors.Wrapf(err, `missing Storage Api token, please use "--%s" flag or ENV variable "%s"`, options.StorageAPITokenOpt, root.options.GetEnvName(options.StorageAPITokenOpt)))
+			modifiedErrs.Append(errors.Wrapf(err, `missing Storage Api token, please use "--%s" flag or ENV variable "%s"`, StorageAPITokenOpt, env.NewNamingConvention(cmdconfig.ENVPrefix).FlagToEnv(StorageAPIHostOpt)))
 		default:
 			modifiedErrs.Append(err)
 		}
 	}
 
 	fullErr := errors.PrefixError(modifiedErrs, "Error")
-	root.logger.Debugf("Error debug log:\n%s", errors.Format(fullErr, errors.FormatWithStack(), errors.FormatWithUnwrap()))
+	root.logger.Debugf(root.Context(), "Error debug log:\n%s", errors.Format(fullErr, errors.FormatWithStack(), errors.FormatWithUnwrap()))
 	root.PrintErrln(errors.Format(fullErr, errors.FormatAsSentences()))
 }
 
 func (root *RootCommand) setupLogger() {
 	// Get log file
 	var logFileErr error
-	root.logFile, logFileErr = log.NewLogFile(root.options.LogFilePath)
+	root.logFile, logFileErr = log.NewLogFile(root.globalFlags.LogFile.Value)
+
+	var logFormatErr error
+	root.logFormat, logFormatErr = log.NewLogFormat(root.globalFlags.LogFormat.Value)
 
 	// Get temporary logger
 	memoryLogger, _ := root.logger.(*log.MemoryLogger)
 
 	// Create logger
-	root.logger = log.NewCliLogger(root.OutOrStdout(), root.ErrOrStderr(), root.logFile, root.options.Verbose)
-	root.SetOut(root.logger.InfoWriter())
-	root.SetErr(root.logger.WarnWriter())
+	root.logger = log.NewCliLogger(root.OutOrStdout(), root.ErrOrStderr(), root.logFile, root.logFormat, root.globalFlags.Verbose.Value)
 
 	// Warn if user specified log file + it cannot be opened
-	if logFileErr != nil && root.options.LogFilePath != "" {
-		root.logger.Warnf("Cannot open log file: %s", logFileErr)
+	if logFileErr != nil && root.globalFlags.LogFile.Value != "" {
+		root.logger.Warnf(root.Context(), "Cannot open log file: %s", logFileErr)
+	}
+
+	// Warn if user specified invalid log format
+	if logFormatErr != nil {
+		root.logger.Warnf(root.Context(), "Invalid log format: %s", logFormatErr)
 	}
 
 	// Log info
-	w := root.logger.DebugWriter()
-	w.WriteString(root.Version)
-	w.WriteString(fmt.Sprintf("Running command %v", os.Args))
-	w.WriteString(root.options.Dump())
+	root.logger.Debug(root.Context(), root.Version)
+	root.logger.Debugf(root.Context(), "Running command %v", os.Args)
+
 	if root.logFile == nil {
-		w.WriteString(`Log file: -`)
+		root.logger.Debug(root.Context(), `Log file: -`)
 	} else {
-		w.WriteString(`Log file: ` + root.logFile.Path())
+		root.logger.Debug(root.Context(), `Log file: `+root.logFile.Path())
 	}
 
 	// Copy logs from the temporary logger
@@ -383,7 +413,7 @@ func (root *RootCommand) setupLogger() {
 }
 
 // tearDown does clean-up after command execution.
-func (root *RootCommand) tearDown(exitCode int, panicErr interface{}) int {
+func (root *RootCommand) tearDown(exitCode int, panicErr any) int {
 	// Logger may be uninitialized, if error occurred before initialization
 	if _, ok := root.logger.(*log.MemoryLogger); ok {
 		root.setupLogger()
@@ -395,8 +425,13 @@ func (root *RootCommand) tearDown(exitCode int, panicErr interface{}) int {
 			logFilePath = root.logFile.Path()
 		}
 
+		ctx := root.Context()
+		if ctx == nil {
+			ctx = context.Background()
+		}
+
 		// Process panic
-		exitCode = cli.ProcessPanic(panicErr, root.logger, logFilePath)
+		exitCode = cli.ProcessPanic(ctx, panicErr, root.logger, logFilePath)
 	}
 
 	// Close log file

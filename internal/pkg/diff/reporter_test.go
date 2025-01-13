@@ -1,7 +1,6 @@
 package diff
 
 import (
-	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -29,7 +28,7 @@ func TestReporterValuesDiffSameType2(t *testing.T) {
 
 func TestReporterValuesDiffSameTypeInterface(t *testing.T) {
 	t.Parallel()
-	out := valuesDiff(reflect.ValueOf(interface{}([]int{1, 2})), reflect.ValueOf(interface{}([]int{3, 4})))
+	out := valuesDiff(reflect.ValueOf(any([]int{1, 2})), reflect.ValueOf(any([]int{3, 4})))
 	assert.Equal(t, []string{
 		`- [1 2]`,
 		`+ [3 4]`,
@@ -56,7 +55,7 @@ func TestReporterValuesDiffDifferentType2(t *testing.T) {
 
 func TestReporterValuesDiffDifferentTypeInterface(t *testing.T) {
 	t.Parallel()
-	out := valuesDiff(reflect.ValueOf(interface{}([]float64{1, 2})), reflect.ValueOf(interface{}([]int{1, 2})))
+	out := valuesDiff(reflect.ValueOf(any([]float64{1, 2})), reflect.ValueOf(any([]int{1, 2})))
 	assert.Equal(t, []string{
 		`- []float64{1, 2}`,
 		`+ []int{1, 2}`,
@@ -76,7 +75,7 @@ func TestReporterStringsDiff(t *testing.T) {
 	}
 	for i, c := range cases {
 		result := stringsDiff(c.remote, c.local)
-		assert.Equal(t, c.result, result, fmt.Sprintf(`case "%d"`, i))
+		assert.Equal(t, c.result, result, `case "%d"`, i)
 	}
 }
 

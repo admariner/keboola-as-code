@@ -21,7 +21,7 @@ type Context struct {
 }
 
 type (
-	variablesValues map[string]interface{}
+	variablesValues map[string]any
 	nativeFunctions []*NativeFunction
 	globalBinding   map[ast.Identifier]ast.Node
 )
@@ -79,13 +79,6 @@ func (c *Context) WithImporter(importer jsonnet.Importer) *Context {
 	return &clone
 }
 
-func (c *Context) Ctx() context.Context {
-	if c == nil {
-		return context.Background()
-	}
-	return c.ctx
-}
-
 func (c *Context) Pretty() bool {
 	if c == nil {
 		return true
@@ -102,7 +95,7 @@ func (c *Context) FilePath() string {
 
 // ExtVar registers variable to the Jsonnet context.
 // Variable can be used in the Jsonnet code by: std.extVar("<NAME>").
-func (c *Context) ExtVar(name string, value interface{}) {
+func (c *Context) ExtVar(name string, value any) {
 	c.extVariables.add(name, value)
 }
 
@@ -124,13 +117,7 @@ func (c *Context) NativeFunctionWithAlias(f *NativeFunction) {
 
 	// Register a shortcut: FN_NAME(...)
 	// as an alternative to the standard: std.native("FN_NAME")(...)
-	c.GlobalBinding(f.Name, &ast.Apply{
-		Target: &ast.Index{
-			Target: &ast.Var{Id: "std"},
-			Index:  &ast.LiteralString{Value: "native"},
-		},
-		Arguments: ast.Arguments{Positional: []ast.CommaSeparatedExpr{{Expr: &ast.LiteralString{Value: f.Name}}}},
-	})
+	c.GlobalBinding(f.Name, Alias(f.Name))
 }
 
 func (c *Context) GlobalBinding(identifier string, body ast.Node) {
@@ -171,7 +158,7 @@ func (v globalBinding) registerTo(vm *jsonnet.VM) {
 	}
 }
 
-func (v variablesValues) add(name string, value interface{}) {
+func (v variablesValues) add(name string, value any) {
 	if _, found := v[name]; found {
 		panic(errors.Errorf(`variable "%s" is already defined`, name))
 	}

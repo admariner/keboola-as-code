@@ -6,8 +6,46 @@ import (
 	"strings"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/model"
+	"github.com/keboola/keboola-as-code/internal/pkg/template/repository"
 	"github.com/keboola/keboola-as-code/internal/pkg/utils/errors"
 )
+
+type Repositories []model.TemplateRepository
+
+func DefaultRepositories() Repositories {
+	return Repositories{
+		{
+			Type: model.RepositoryTypeGit,
+			Name: repository.DefaultTemplateRepositoryName,
+			URL:  repository.DefaultTemplateRepositoryURL,
+			Ref:  repository.DefaultTemplateRepositoryRefMain,
+		},
+		{
+			Type: model.RepositoryTypeGit,
+			Name: repository.DefaultTemplateRepositoryNameBeta,
+			URL:  repository.DefaultTemplateRepositoryURL,
+			Ref:  repository.DefaultTemplateRepositoryRefBeta,
+		},
+		{
+			Type: model.RepositoryTypeGit,
+			Name: repository.DefaultTemplateRepositoryNameDev,
+			URL:  repository.DefaultTemplateRepositoryURL,
+			Ref:  repository.DefaultTemplateRepositoryRefDev,
+		},
+		{
+			Type: model.RepositoryTypeGit,
+			Name: repository.ComponentsTemplateRepositoryName,
+			URL:  repository.ComponentsTemplateRepositoryURL,
+			Ref:  repository.DefaultTemplateRepositoryRefMain,
+		},
+		{
+			Type: model.RepositoryTypeGit,
+			Name: repository.ComponentsTemplateRepositoryNameBeta,
+			URL:  repository.ComponentsTemplateRepositoryURL,
+			Ref:  repository.DefaultTemplateRepositoryRefBeta,
+		},
+	}
+}
 
 func (r Repositories) MarshalText() ([]byte, error) {
 	var out bytes.Buffer

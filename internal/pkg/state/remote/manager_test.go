@@ -14,6 +14,7 @@ import (
 	"github.com/keboola/go-client/pkg/keboola"
 	"github.com/keboola/go-utils/pkg/orderedmap"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/encoding/json"
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem"
@@ -103,19 +104,19 @@ func TestRemoteSaveMapper(t *testing.T) {
 
 	// Save object
 	uow.SaveObject(configState, configState.Local, model.ChangedFields{})
-	assert.NoError(t, uow.Invoke())
+	require.NoError(t, uow.Invoke())
 
 	// Modified version was sent to the API
 	reqBodyRaw, err := io.ReadAll(httpRequest.Body)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	reqBody, err := url.QueryUnescape(string(reqBodyRaw))
-	assert.NoError(t, err)
-	assert.Contains(t, reqBody, `configuration={"key":"api value","new":"value"}`)
-	assert.Contains(t, reqBody, `name=modified name`)
+	require.NoError(t, err)
+	assert.Contains(t, reqBody, "\"configuration\":{\"key\"\n:\"api value\"\n,\"new\"\n:\"value\"\n}")
+	assert.Contains(t, reqBody, `"name":"modified name"`)
 
 	// But the internal state is unchanged
 	assert.Equal(t, `internal name`, configState.Local.Name)
-	assert.Equal(t, `{"key":"internal value"}`, json.MustEncodeString(configState.Local.Content, false))
+	assert.JSONEq(t, `{"key":"internal value"}`, json.MustEncodeString(configState.Local.Content, false))
 
 	// AfterRemoteOperation event has been called
 	assert.Equal(t, []string{
@@ -133,8 +134,8 @@ func TestRemoteLoadMapper(t *testing.T) {
 	httpTransport.RegisterResponder(
 		resty.MethodGet,
 		`=~storage/dev-branches`,
-		httpmock.NewJsonResponderOrPanic(200, []interface{}{
-			map[string]interface{}{
+		httpmock.NewJsonResponderOrPanic(200, []any{
+			map[string]any{
 				"id":   123,
 				"name": "My branch",
 			},
@@ -166,14 +167,14 @@ func TestRemoteLoadMapper(t *testing.T) {
 	httpTransport.RegisterResponder(
 		resty.MethodGet,
 		`=~storage/branch/123/components`,
-		httpmock.NewJsonResponderOrPanic(200, []interface{}{
-			map[string]interface{}{
+		httpmock.NewJsonResponderOrPanic(200, []any{
+			map[string]any{
 				"id":   "foo.bar",
 				"name": "Foo Bar",
-				"configurations": []map[string]interface{}{
+				"configurations": []map[string]any{
 					{
 						"id": "456",
-						"configuration": map[string]interface{}{
+						"configuration": map[string]any{
 							"key": "api value",
 						},
 					},
@@ -184,7 +185,7 @@ func TestRemoteLoadMapper(t *testing.T) {
 
 	// Load all
 	uow.LoadAll(model.NoFilter())
-	assert.NoError(t, uow.Invoke())
+	require.NoError(t, uow.Invoke())
 
 	// Config has been loaded
 	assert.Len(t, projectState.Configs(), 1)
@@ -198,7 +199,7 @@ func TestRemoteLoadMapper(t *testing.T) {
 
 	// API response has been mapped
 	assert.Equal(t, `internal name`, config.Name)
-	assert.Equal(t, `{"key":"internal value","new":"value"}`, json.MustEncodeString(config.Content, false))
+	assert.JSONEq(t, `{"key":"internal value","new":"value"}`, json.MustEncodeString(config.Content, false))
 
 	// AfterRemoteOperation event has been called
 	assert.Equal(t, []string{
@@ -215,8 +216,8 @@ func TestLoadConfigMetadata(t *testing.T) {
 	httpTransport.RegisterResponder(
 		resty.MethodGet,
 		`=~storage/dev-branches`,
-		httpmock.NewJsonResponderOrPanic(200, []interface{}{
-			map[string]interface{}{
+		httpmock.NewJsonResponderOrPanic(200, []any{
+			map[string]any{
 				"id":   123,
 				"name": "My branch",
 			},
@@ -266,22 +267,22 @@ func TestLoadConfigMetadata(t *testing.T) {
 	httpTransport.RegisterResponder(
 		resty.MethodGet,
 		`=~storage/branch/123/components`,
-		httpmock.NewJsonResponderOrPanic(200, []interface{}{
-			map[string]interface{}{
+		httpmock.NewJsonResponderOrPanic(200, []any{
+			map[string]any{
 				"id":   "foo.bar",
 				"name": "Foo Bar",
-				"configurations": []map[string]interface{}{
+				"configurations": []map[string]any{
 					{
 						"id":   "456",
 						"name": "Config With Metadata",
-						"configuration": map[string]interface{}{
+						"configuration": map[string]any{
 							"key": "value",
 						},
 					},
 					{
 						"id":   "789",
 						"name": "Config Without Metadata",
-						"configuration": map[string]interface{}{
+						"configuration": map[string]any{
 							"key": "value",
 						},
 					},
@@ -292,7 +293,7 @@ func TestLoadConfigMetadata(t *testing.T) {
 
 	// Load all
 	uow.LoadAll(model.NoFilter())
-	assert.NoError(t, uow.Invoke())
+	require.NoError(t, uow.Invoke())
 
 	// Check
 	config1Key := model.ConfigKey{
@@ -352,15 +353,15 @@ func TestSaveConfigMetadata_Create(t *testing.T) {
 
 	// Save
 	uow.SaveObject(objectState, objectState.Local, model.NewChangedFields())
-	assert.NoError(t, uow.Invoke())
+	require.NoError(t, uow.Invoke())
 
 	// Check
 	assert.NotNil(t, httpRequest)
 	reqBodyRaw, err := io.ReadAll(httpRequest.Body)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	reqBody, err := url.QueryUnescape(string(reqBodyRaw))
-	assert.NoError(t, err)
-	assert.Equal(t, "metadata[0][key]=KBC-KaC-meta1&metadata[0][value]=val1", reqBody)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"metadata":[{"key":"KBC-KaC-meta1","value":"val1"}]}`, reqBody)
 }
 
 func TestSaveConfigMetadata_Create_Empty(t *testing.T) {
@@ -385,7 +386,7 @@ func TestSaveConfigMetadata_Create_Empty(t *testing.T) {
 
 	// Save
 	uow.SaveObject(objectState, objectState.Local, model.NewChangedFields())
-	assert.NoError(t, uow.Invoke())
+	require.NoError(t, uow.Invoke())
 }
 
 func TestSaveConfigMetadata_Update(t *testing.T) {
@@ -425,14 +426,14 @@ func TestSaveConfigMetadata_Update(t *testing.T) {
 
 	// Save
 	uow.SaveObject(objectState, objectState.Local, model.NewChangedFields("metadata"))
-	assert.NoError(t, uow.Invoke())
+	require.NoError(t, uow.Invoke())
 
 	// Check
 	reqBodyRaw, err := io.ReadAll(httpRequest.Body)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	reqBody, err := url.QueryUnescape(string(reqBodyRaw))
-	assert.NoError(t, err)
-	assert.Equal(t, "metadata[0][key]=KBC-KaC-meta1&metadata[0][value]=val1", reqBody)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"metadata":[{"key":"KBC-KaC-meta1","value":"val1"}]}`, reqBody)
 }
 
 func TestSaveConfigMetadata_Update_NoChange(t *testing.T) {
@@ -460,10 +461,10 @@ func TestSaveConfigMetadata_Update_NoChange(t *testing.T) {
 
 	// Save, metadata field is not changed
 	uow.SaveObject(objectState, objectState.Local, model.NewChangedFields())
-	assert.NoError(t, uow.Invoke())
+	require.NoError(t, uow.Invoke())
 }
 
-func newTestRemoteUOW(t *testing.T, mappers ...interface{}) (*remote.UnitOfWork, *httpmock.MockTransport, *state.Registry) {
+func newTestRemoteUOW(t *testing.T, mappers ...any) (*remote.UnitOfWork, *httpmock.MockTransport, *state.Registry) {
 	t.Helper()
 	c, httpTransport := client.NewMockedClient()
 	httpTransport.RegisterResponder(resty.MethodGet, `/v2/storage/?exclude=components`,
@@ -473,8 +474,8 @@ func newTestRemoteUOW(t *testing.T, mappers ...interface{}) (*remote.UnitOfWork,
 		}`),
 	)
 
-	api, err := keboola.NewAPI(context.Background(), "https://connection.keboola.com", keboola.WithClient(&c))
-	assert.NoError(t, err)
+	api, err := keboola.NewAuthorizedAPI(context.Background(), "https://connection.keboola.com", "my-token", keboola.WithClient(&c))
+	require.NoError(t, err)
 	localManager, projectState := newTestLocalManager(t, mappers)
 	mapperInst := mapper.New().AddMapper(mappers...)
 
@@ -482,7 +483,7 @@ func newTestRemoteUOW(t *testing.T, mappers ...interface{}) (*remote.UnitOfWork,
 	return remoteManager.NewUnitOfWork(context.Background(), `change desc`), httpTransport, projectState
 }
 
-func newTestLocalManager(t *testing.T, mappers []interface{}) (*local.Manager, *state.Registry) {
+func newTestLocalManager(t *testing.T, mappers []any) (*local.Manager, *state.Registry) {
 	t.Helper()
 
 	logger := log.NewDebugLogger()
@@ -490,7 +491,7 @@ func newTestLocalManager(t *testing.T, mappers []interface{}) (*local.Manager, *
 	fs := aferofs.NewMemoryFs(filesystem.WithLogger(logger))
 
 	m := manifest.New(1, "foo.bar")
-	projectState := state.NewRegistry(knownpaths.NewNop(), naming.NewRegistry(), testapi.MockedComponentsMap(), model.SortByPath)
+	projectState := state.NewRegistry(knownpaths.NewNop(context.Background()), naming.NewRegistry(), testapi.MockedComponentsMap(), model.SortByPath)
 
 	namingTemplate := naming.TemplateWithIds()
 	namingRegistry := naming.NewRegistry()

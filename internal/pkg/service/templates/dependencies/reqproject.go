@@ -2,7 +2,6 @@ package dependencies
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/log"
 	"github.com/keboola/keboola-as-code/internal/pkg/model"
@@ -36,14 +35,9 @@ func NewProjectRequestScope(ctx context.Context, pubScp PublicRequestScope, toke
 
 func newProjectRequestScope(pubScp PublicRequestScope, prjScp dependencies.ProjectScope) *projectRequestScope {
 	d := &projectRequestScope{}
-
 	d.PublicRequestScope = pubScp
-
 	d.ProjectScope = prjScp
-
-	loggerPrefix := fmt.Sprintf("[project=%d][token=%s]", d.ProjectID(), d.StorageAPITokenID())
-	d.logger = pubScp.Logger().AddPrefix(loggerPrefix)
-
+	d.logger = pubScp.Logger()
 	return d
 }
 
@@ -57,11 +51,18 @@ func (v *projectRequestScope) ProjectRepositories() *model.TemplateRepositories 
 		features := v.ProjectFeatures()
 		out := model.NewTemplateRepositories()
 		for _, repo := range v.RepositoryManager().DefaultRepositories() {
-			if repo.Name == repository.DefaultTemplateRepositoryName && repo.Ref == repository.DefaultTemplateRepositoryRefMain {
-				if features.Has(repository.FeatureTemplateRepositoryBeta) {
+			switch repo.Name {
+			case repository.ComponentsTemplateRepositoryName:
+				if repo.Ref == repository.DefaultTemplateRepositoryRefMain && features.Has(repository.FeatureComponentsTemplateRepositoryBeta) {
 					repo.Ref = repository.DefaultTemplateRepositoryRefBeta
-				} else if features.Has(repository.FeatureTemplateRepositoryDev) {
-					repo.Ref = repository.DefaultTemplateRepositoryRefDev
+				}
+			case repository.DefaultTemplateRepositoryName:
+				if repo.Ref == repository.DefaultTemplateRepositoryRefMain {
+					if features.Has(repository.FeatureTemplateRepositoryBeta) {
+						repo.Ref = repository.DefaultTemplateRepositoryRefBeta
+					} else if features.Has(repository.FeatureTemplateRepositoryDev) {
+						repo.Ref = repository.DefaultTemplateRepositoryRefDev
+					}
 				}
 			}
 			out.Add(repo)

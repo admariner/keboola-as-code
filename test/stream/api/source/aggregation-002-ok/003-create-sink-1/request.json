@@ -1,0 +1,29 @@
+{
+  "path": "/v1/branches/%%TEST_DEFAULT_BRANCH_ID%%/sources/my-source-1/sinks",
+  "method": "POST",
+  "headers": {
+    "Content-Type": "application/json",
+    "X-StorageApi-Token": "%%TEST_KBC_STORAGE_API_TOKEN%%"
+  },
+  "body": {
+    "sinkId": "my-sink-1",
+    "name": "My Sink",
+    "type": "table",
+    "table": {
+      "type": "keboola",
+      "tableId": "in.c-my-bucket.my-table",
+      "mapping": {
+        "columns": [
+          {
+            "type": "uuid",
+            "name": "id"
+          },
+          {
+            "type": "body",
+            "name": "body"
+          }
+        ]
+      }
+    }
+  }
+}

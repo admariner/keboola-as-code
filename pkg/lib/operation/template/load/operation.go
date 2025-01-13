@@ -38,7 +38,7 @@ func (e DeprecatedTemplateError) StatusCode() int {
 	return http.StatusBadRequest
 }
 
-func Run(ctx context.Context, d dependencies, repository *repository.Repository, reference model.TemplateRef) (tmpl *template.Template, err error) {
+func Run(ctx context.Context, d dependencies, repository *repository.Repository, reference model.TemplateRef, projectsFilePath string) (tmpl *template.Template, err error) {
 	ctx, span := d.Telemetry().Tracer().Start(ctx, "keboola.go.operation.template.load")
 	defer span.End(&err)
 
@@ -61,7 +61,7 @@ func Run(ctx context.Context, d dependencies, repository *repository.Repository,
 
 	// Check if template dir exists
 	templatePath := filesystem.Join(templateRecord.Path, versionRecord.Path)
-	if !repository.Fs().IsDir(templatePath) {
+	if !repository.Fs().IsDir(ctx, templatePath) {
 		return nil, errors.Errorf(`template dir "%s" not found`, templatePath)
 	}
 
@@ -75,5 +75,5 @@ func Run(ctx context.Context, d dependencies, repository *repository.Repository,
 	reference = model.NewTemplateRef(reference.Repository(), reference.TemplateID(), versionRecord.Version.String())
 
 	// Load template
-	return template.New(ctx, reference, templateRecord, versionRecord, templateDir, repository.CommonDir(), d.Components())
+	return template.New(ctx, reference, templateRecord, versionRecord, templateDir, repository.CommonDir(), projectsFilePath, d.Components())
 }

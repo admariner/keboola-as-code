@@ -10,13 +10,13 @@ builds:
       - CGO_ENABLED=0
     ldflags:
       - -s -w
-      - -X github.com/keboola/keboola-as-code/internal/pkg/build.BuildVersion={{ if index .Env "VERSION"  }}{{ .Env.VERSION }}{{ else }}dev{{ end }}
-      - -X github.com/keboola/keboola-as-code/internal/pkg/build.BuildDate={{.Date}}
-      - -X github.com/keboola/keboola-as-code/internal/pkg/build.GitCommit={{.Commit}}
+      - -X github.com/keboola/keboola-as-code/internal/pkg/build.BuildVersion={{ if index .Env "VERSION" }}{{ .Env.VERSION }}{{ else }}dev{{ end }}
+      - -X github.com/keboola/keboola-as-code/internal/pkg/build.BuildDate={{ if index .Env "CLI_BUILD_DATE" }}{{ .Env.CLI_BUILD_DATE }}{{ else }}{{.Date}}{{ end }}
+      - -X github.com/keboola/keboola-as-code/internal/pkg/build.GitCommit={{ if index .Env "CLI_BUILD_GIT_COMMIT" }}{{ .Env.CLI_BUILD_GIT_COMMIT }}{{ else }}{{.Commit}}{{ end }}
     hooks:
       post:
         # Copy binary to BUILD_TARGET_PATH if set
-        - '{{ if index .Env "BUILD_TARGET_PATH"  }}cp "{{ .Path }}" "{{ .Env.BUILD_TARGET_PATH }}"{{ else }}true{{ end }}'
+        - '{{ if index .Env "BUILD_TARGET_PATH" }}cp "{{ .Path }}" "{{ .Env.BUILD_TARGET_PATH }}"{{ else }}true{{ end }}'
 
 changelog:
   skip: true
@@ -33,7 +33,7 @@ archives:
 signs:
   - id: mac-os-signed
     signature: "${artifact}.zip"
-    cmd: ./build/package/mac-os/gon/notarize.sh
+    cmd: ./build/package/mac-os/notarytool/notarize.sh
     args: [ "${artifact}", "${signature}" ]
     artifacts: binary
 
@@ -41,7 +41,7 @@ checksum:
   algorithm: sha256
 
 snapshot:
-  name_template: '{{ if index .Env "SNAPSHOT"  }}{{ .Env.SNAPSHOT }}{{ else }}dev{{ end }}'
+  name_template: '{{ if index .Env "SNAPSHOT" }}{{ .Env.SNAPSHOT }}{{ else }}dev{{ end }}'
 
 nfpms:
   - id: packages
@@ -49,7 +49,7 @@ nfpms:
     homepage: https://www.keboola.com/product/cli
     maintainer: Keboola <support@keboola.com>
     description: Keboola CLI tool.
-    license: MIT
+    license: Apache2
     bindir: /usr/bin
     formats:
       - apk
@@ -59,40 +59,24 @@ nfpms:
       - git
     rpm:
       signature:
-        key_file: '{{ if index .Env "DEB_KEY_PRIVATE_PATH"  }}{{ .Env.DEB_KEY_PRIVATE_PATH }}{{ end }}'
+        key_file: '{{ if index .Env "DEB_KEY_PRIVATE_PATH" }}{{ .Env.DEB_KEY_PRIVATE_PATH }}{{ end }}'
     deb:
       signature:
-        key_file: '{{ if index .Env "RPM_KEY_PRIVATE_PATH"  }}{{ .Env.RPM_KEY_PRIVATE_PATH }}{{ end }}'
+        key_file: '{{ if index .Env "RPM_KEY_PRIVATE_PATH" }}{{ .Env.RPM_KEY_PRIVATE_PATH }}{{ end }}'
     apk:
       signature:
         key_name: keboola
-        key_file: '{{ if index .Env "APK_KEY_PRIVATE_PATH"  }}{{ .Env.APK_KEY_PRIVATE_PATH }}{{ end }}'
+        key_file: '{{ if index .Env "APK_KEY_PRIVATE_PATH" }}{{ .Env.APK_KEY_PRIVATE_PATH }}{{ end }}'
 
-scoop:
-  bucket:
-    owner: keboola
-    name: scoop-keboola-cli
-  homepage: https://www.keboola.com/product/cli
-  description: Operate your cloud data pipeline from the command line
-  license: MIT
-  url_template: "{{ .Env.CLI_DIST_BASE_URL }}/zip/{{ .ArtifactName }}"
-  skip_upload: true
-
-publishers:
-  - name: Upload artifacts to KAC Assets S3
-    signature: true
-    checksum: true
-    cmd: ./build/package/s3/publish.sh "{{ abs .ArtifactPath }}" "{{ .ArtifactName }}" "{{ .ProjectName }}" "{{ .Version }}" "{{ .Os }}" "{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}"
-    env:
-      - AWS_REGION={{ .Env.CLI_DIST_AWS_REGION }}
-      - AWS_BUCKET_NAME={{ .Env.CLI_DIST_AWS_BUCKET_NAME }}
-      - AWS_ACCESS_KEY_ID={{ .Env.CLI_DIST_AWS_ACCESS_KEY_ID }}
-      - AWS_SECRET_ACCESS_KEY={{ .Env.CLI_DIST_AWS_SECRET_ACCESS_KEY }}
-      - AWS_SESSION_TOKEN={{ .Env.CLI_DIST_AWS_SESSION_TOKEN }}
-    ids:
-      - archives
-      - packages
-      - mac-os-signed
+scoops:
+  - repository:
+      owner: keboola
+      name: scoop-keboola-cli
+    homepage: https://www.keboola.com/product/cli
+    description: Operate your cloud data pipeline from the command line
+    license: Apache2
+    url_template: "{{ .Env.CLI_DIST_BASE_URL }}/zip/{{ .ArtifactName }}"
+    skip_upload: true
 
 release:
   disable: true

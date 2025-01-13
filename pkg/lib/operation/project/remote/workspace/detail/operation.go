@@ -11,7 +11,7 @@ import (
 )
 
 type dependencies interface {
-	KeboolaProjectAPI() *keboola.API
+	KeboolaProjectAPI() *keboola.AuthorizedAPI
 	Logger() log.Logger
 	Telemetry() telemetry.Telemetry
 }
@@ -37,14 +37,15 @@ func Run(ctx context.Context, d dependencies, configID keboola.ConfigID) (err er
 
 	c, w := workspace.Config, workspace.Workspace
 
-	logger.Infof("Workspace \"%s\"\nID: %s\nType: %s", c.Name, c.ID, w.Type)
+	logger.Infof(ctx, "Workspace \"%s\"\nID: %s\nType: %s", c.Name, c.ID, w.Type)
 	if keboola.WorkspaceSupportsSizes(w.Type) {
-		logger.Infof(`Size: %s`, w.Size)
+		logger.Infof(ctx, `Size: %s`, w.Size)
 	}
 
 	switch w.Type {
 	case keboola.WorkspaceTypeSnowflake:
 		logger.Infof(
+			ctx,
 			"Credentials:\n  Host: %s\n  User: %s\n  Password: %s\n  Database: %s\n  Schema: %s\n  Warehouse: %s",
 			w.Host,
 			w.User,
@@ -57,6 +58,7 @@ func Run(ctx context.Context, d dependencies, configID keboola.ConfigID) (err er
 		fallthrough
 	case keboola.WorkspaceTypeR:
 		logger.Infof(
+			ctx,
 			"Credentials:\n  Host: %s\n  Password: %s",
 			w.Host,
 			w.Password,

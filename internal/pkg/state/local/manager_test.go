@@ -9,11 +9,13 @@ import (
 
 	"github.com/keboola/go-utils/pkg/orderedmap"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/encoding/json"
 	"github.com/keboola/keboola-as-code/internal/pkg/env"
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem"
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem/aferofs"
+	"github.com/keboola/keboola-as-code/internal/pkg/log"
 	"github.com/keboola/keboola-as-code/internal/pkg/mapper/corefiles"
 	"github.com/keboola/keboola-as-code/internal/pkg/model"
 	"github.com/keboola/keboola-as-code/internal/pkg/naming"
@@ -98,12 +100,12 @@ func TestLocalSaveMapper(t *testing.T) {
 
 	// Save object
 	uow.SaveObject(configState, configState.Remote, model.ChangedFields{})
-	assert.NoError(t, uow.Invoke())
+	require.NoError(t, uow.Invoke())
 
 	// File content has been mapped
-	configFile, err := fs.ReadFile(filesystem.NewFileDef(filesystem.Join(`branch`, `config`, naming.ConfigFile)).SetDescription(`config file`))
-	assert.NoError(t, err)
-	assert.Equal(t, "{\n  \"key\": \"overwritten\",\n  \"new\": \"value\"\n}", strings.TrimSpace(configFile.Content))
+	configFile, err := fs.ReadFile(context.Background(), filesystem.NewFileDef(filesystem.Join(`branch`, `config`, naming.ConfigFile)).SetDescription(`config file`))
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"key": "overwritten","new": "value"}`, strings.TrimSpace(configFile.Content))
 
 	// AfterLocalOperation event has been called
 	assert.Equal(t, []string{
@@ -126,7 +128,7 @@ func TestLocalLoadMapper(t *testing.T) {
 	_, testFile, _, _ := runtime.Caller(0)
 	testDir := filesystem.Dir(testFile)
 	inputDir := filesystem.Join(testDir, `..`, `..`, `fixtures`, `local`, `minimal`)
-	assert.NoError(t, aferofs.CopyFs2Fs(nil, inputDir, fs, ``))
+	require.NoError(t, aferofs.CopyFs2Fs(nil, inputDir, fs, ``))
 
 	// Replace placeholders in files
 	envs := env.Empty()
@@ -134,17 +136,18 @@ func TestLocalLoadMapper(t *testing.T) {
 	envs.Set("LOCAL_PROJECT_ID", "12345")
 	envs.Set("LOCAL_STATE_MAIN_BRANCH_ID", "111")
 	envs.Set("LOCAL_STATE_GENERIC_CONFIG_ID", "456")
-	testhelper.MustReplaceEnvsDir(fs, `/`, envs)
+	err := testhelper.ReplaceEnvsDir(context.Background(), fs, `/`, envs)
+	require.NoError(t, err)
 
 	// Load objects
-	m, err := projectManifest.Load(fs, false)
-	assert.NoError(t, err)
+	m, err := projectManifest.Load(context.Background(), log.NewNopLogger(), fs, env.Empty(), false)
+	require.NoError(t, err)
 	uow.LoadAll(m, *m.Filter())
-	assert.NoError(t, uow.Invoke())
+	require.NoError(t, uow.Invoke())
 
 	// Internal state has been mapped
 	configState := projectState.MustGet(model.ConfigKey{BranchID: 111, ComponentID: `ex-generic-v2`, ID: `456`}).(*model.ConfigState)
-	assert.Equal(t, `{"parameters":"overwritten","new":"value"}`, json.MustEncodeString(configState.Local.Content, false))
+	assert.JSONEq(t, `{"parameters":"overwritten","new":"value"}`, json.MustEncodeString(configState.Local.Content, false))
 
 	// AfterLocalOperation event has been called
 	assert.Equal(t, []string{
@@ -155,7 +158,7 @@ func TestLocalLoadMapper(t *testing.T) {
 
 func newEmptyState(t *testing.T) *state.State {
 	t.Helper()
-	d := dependencies.NewMocked(t)
+	d := dependencies.NewMocked(t, context.Background())
 	mockedState := d.MockedState()
 	mockedState.Mapper().AddMapper(corefiles.NewMapper(mockedState))
 	return mockedState

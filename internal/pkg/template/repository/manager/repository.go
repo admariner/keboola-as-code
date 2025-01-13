@@ -102,12 +102,13 @@ func (r *CachedRepository) Template(ctx context.Context, reference model.Templat
 
 	// Load template, there is used "single flight" library:
 	// the function is called only once, but every caller will get the same results.
-	ch := r.templatesInit.DoChan(name, func() (interface{}, error) {
+	ch := r.templatesInit.DoChan(name, func() (any, error) {
 		startTime := time.Now()
-		r.d.Logger().Infof(`loading template "%s/%s"`, reference.FullName(), r.git.CommitHash())
+		r.d.Logger().Infof(ctx, `loading template "%s/%s"`, reference.FullName(), r.git.CommitHash())
 
 		// Load template
-		tmpl, err := loadTemplateOp.Run(ctx, r.d, r.repo, reference)
+		r.d.Logger().Infof(ctx, r.repo.Fs().BasePath())
+		tmpl, err := loadTemplateOp.Run(ctx, r.d, r.repo, reference, "")
 		if err != nil {
 			return nil, errors.Errorf(`cannot load template "%s": %w`, reference.FullName(), err)
 		}
@@ -118,7 +119,7 @@ func (r *CachedRepository) Template(ctx context.Context, reference model.Templat
 		r.templatesLock.Unlock()
 
 		// Load done
-		r.d.Logger().Infof(`loaded template "%s/%s" | %s`, reference.FullName(), r.git.CommitHash(), time.Since(startTime))
+		r.d.Logger().WithDuration(time.Since(startTime)).Infof(ctx, `loaded template "%s/%s"`, reference.FullName(), r.git.CommitHash())
 		return tmpl, nil
 	})
 
@@ -136,20 +137,20 @@ func (r *CachedRepository) update(ctx context.Context) (*CachedRepository, bool,
 	if repo, ok := r.git.(*git.RemoteRepository); ok {
 		// Log start
 		startTime := time.Now()
-		r.d.Logger().Infof(`repository "%s" update started`, r.URLAndRef())
+		r.d.Logger().Infof(ctx, `repository "%s" update started`, r.URLAndRef())
 
 		// Pull
 		result, err := pullOp.Run(ctx, repo, r.d)
 		if err != nil {
-			r.d.Logger().Errorf(`error while updating repository "%s": %s`, r.URLAndRef(), err)
+			r.d.Logger().Errorf(ctx, `error while updating repository "%s": %s`, r.URLAndRef(), err)
 			return nil, false, err
 		}
 
 		// Done
 		if result.Changed {
-			r.d.Logger().Infof(`repository "%s" updated from %s to %s | %s`, r.URLAndRef(), result.OldHash, result.NewHash, time.Since(startTime))
+			r.d.Logger().WithDuration(time.Since(startTime)).Infof(ctx, `repository "%s" updated from %s to %s`, r.URLAndRef(), result.OldHash, result.NewHash)
 		} else {
-			r.d.Logger().Infof(`repository "%s" update finished, no change found (%s) | %s`, r.URLAndRef(), result.NewHash, time.Since(startTime))
+			r.d.Logger().WithDuration(time.Since(startTime)).Infof(ctx, `repository "%s" update finished, no change found (%s)`, r.URLAndRef(), result.NewHash)
 		}
 
 		// No change
@@ -180,7 +181,7 @@ func (r *CachedRepository) update(ctx context.Context) (*CachedRepository, bool,
 // If a template fails to load, the error is logged and also returned from this method.
 func (r *CachedRepository) loadAllTemplates(ctx context.Context) error {
 	startTime := time.Now()
-	r.d.Logger().Infof(`loading all templates from repository "%s"`, r.String())
+	r.d.Logger().Infof(ctx, `loading all templates from repository "%s"`, r.String())
 
 	wg := &sync.WaitGroup{}
 	errs := errors.NewMultiError()
@@ -188,16 +189,13 @@ func (r *CachedRepository) loadAllTemplates(ctx context.Context) error {
 		if t.Deprecated {
 			continue
 		}
-
-		t := t
 		for _, v := range t.AllVersions() {
-			v := v
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
 				ref := model.NewTemplateRef(r.repo.Definition(), t.ID, v.Version.String())
 				if _, err := r.Template(ctx, ref); err != nil {
-					r.d.Logger().Errorf(`cannot load template "%s" from repository "%s": %s`, ref.FullName(), r.String(), err)
+					r.d.Logger().Errorf(ctx, `cannot load template "%s" from repository "%s": %s`, ref.FullName(), r.String(), err)
 					errs.Append(errors.Errorf(`cannot load template "%s": %w`, ref.Name(), err))
 				}
 			}()
@@ -206,9 +204,9 @@ func (r *CachedRepository) loadAllTemplates(ctx context.Context) error {
 
 	wg.Wait()
 	if errs.Len() > 0 {
-		r.d.Logger().Errorf(`cannot load all templates from repository "%s", see previous errors | %s`, r.String(), time.Since(startTime))
+		r.d.Logger().WithDuration(time.Since(startTime)).Errorf(ctx, `cannot load all templates from repository "%s", see previous errors`, r.String())
 	} else {
-		r.d.Logger().Infof(`loaded all templates from repository "%s" | %s`, r.String(), time.Since(startTime))
+		r.d.Logger().WithDuration(time.Since(startTime)).Infof(ctx, `loaded all templates from repository "%s"`, r.String())
 	}
 
 	return errs.ErrorOrNil()
@@ -223,13 +221,13 @@ func (r *CachedRepository) lock() UnlockFn {
 
 // free is called when a new version of the repository is ready and the old one can be cleaned.
 // It is waiting until all the requests that use this repository are finished.
-func (r *CachedRepository) free() <-chan struct{} {
+func (r *CachedRepository) free(ctx context.Context) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
 		r.freeLock.Lock()
 		defer r.freeLock.Unlock()
 		r.unlockFn()
-		r.d.Logger().Infof(`cleaned repository cache "%s"`, r.String())
+		r.d.Logger().Infof(ctx, `cleaned repository cache "%s"`, r.String())
 		close(done)
 	}()
 	return done

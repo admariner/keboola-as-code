@@ -123,7 +123,7 @@ func LocalOperationOptions() Options {
 
 type dependencies interface {
 	Components() *model.ComponentsMap
-	KeboolaProjectAPI() *keboola.API
+	KeboolaProjectAPI() *keboola.AuthorizedAPI
 	Logger() log.Logger
 	Telemetry() telemetry.Telemetry
 }
@@ -154,14 +154,14 @@ func Run(ctx context.Context, container state.ObjectsContainer, o OptionsWithFil
 	// Load objects
 	ok, localErr, remoteErr := projectState.Load(ctx, loadOptions)
 	if ok {
-		logger.Debugf("Project state has been successfully loaded.")
+		logger.Debugf(ctx, "Project state has been successfully loaded.")
 	} else {
 		if remoteErr != nil {
 			return nil, InvalidRemoteStateError{error: remoteErr}
 		}
 		if localErr != nil {
 			if o.IgnoreInvalidLocalState {
-				logger.Info(`Ignoring invalid local state.`)
+				logger.Info(ctx, `Ignoring invalid local state.`)
 			} else {
 				return nil, InvalidLocalStateError{error: localErr}
 			}

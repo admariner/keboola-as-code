@@ -31,24 +31,28 @@ type ObjectState interface {
 	RemoteState() Object
 	LocalOrRemoteState() Object
 	RemoteOrLocalState() Object
+	IsIgnored() bool
 }
 
 type BranchState struct {
 	*BranchManifest
-	Remote *Branch `validate:"omitempty,dive"`
-	Local  *Branch `validate:"omitempty,dive"`
+	Remote *Branch
+	Local  *Branch
+	Ignore bool
 }
 
 type ConfigState struct {
 	*ConfigManifest
-	Remote *Config `validate:"omitempty,dive"`
-	Local  *Config `validate:"omitempty,dive"`
+	Remote *Config
+	Local  *Config
+	Ignore bool
 }
 
 type ConfigRowState struct {
 	*ConfigRowManifest
-	Remote *ConfigRow `validate:"omitempty,dive"`
-	Local  *ConfigRow `validate:"omitempty,dive"`
+	Remote *ConfigRow
+	Local  *ConfigRow
+	Ignore bool
 }
 
 // ToAPIObjectKey ...
@@ -190,6 +194,18 @@ func (c *ConfigState) HasRemoteState() bool {
 
 func (r *ConfigRowState) HasRemoteState() bool {
 	return r.Remote != nil
+}
+
+func (b *BranchState) IsIgnored() bool {
+	return b.Ignore
+}
+
+func (c *ConfigState) IsIgnored() bool {
+	return c.Ignore
+}
+
+func (r *ConfigRowState) IsIgnored() bool {
+	return r.Ignore
 }
 
 func (b *BranchState) SetRemoteState(object Object) {

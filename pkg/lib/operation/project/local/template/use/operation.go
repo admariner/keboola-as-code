@@ -3,6 +3,7 @@ package use
 import (
 	"context"
 	"fmt"
+	"io"
 	"sort"
 	"time"
 
@@ -38,13 +39,15 @@ type Options struct {
 
 type dependencies interface {
 	Components() *model.ComponentsMap
-	KeboolaProjectAPI() *keboola.API
+	KeboolaProjectAPI() *keboola.AuthorizedAPI
 	StorageAPIHost() string
 	StorageAPITokenID() string
 	Logger() log.Logger
 	ObjectIDGeneratorFactory() func(ctx context.Context) *keboola.TicketProvider
 	ProjectID() keboola.ProjectID
+	ProjectBackends() []string
 	Telemetry() telemetry.Telemetry
+	Stdout() io.Writer
 }
 
 func LoadTemplateOptions() loadState.Options {
@@ -69,7 +72,7 @@ func Run(ctx context.Context, projectState *project.State, tmpl *template.Templa
 	}
 
 	// Prepare template
-	tmplCtx := use.NewContext(ctx, tmpl.Reference(), tmpl.ObjectsRoot(), o.InstanceID, o.TargetBranch, o.Inputs, tmpl.Inputs().InputsMap(), tickets, d.Components(), projectState.State())
+	tmplCtx := use.NewContext(ctx, tmpl.Reference(), tmpl.ObjectsRoot(), o.InstanceID, o.TargetBranch, o.Inputs, tmpl.Inputs().InputsMap(), tickets, d.Components(), projectState.State(), d.ProjectBackends())
 	plan, err := PrepareTemplate(ctx, d, ExtendedOptions{
 		TargetBranch:          o.TargetBranch,
 		Inputs:                o.Inputs,
@@ -94,6 +97,7 @@ type ExtendedOptions struct {
 	Inputs                template.InputsValues
 	InstanceID            string
 	InstanceName          string
+	ConfigName            string
 	ProjectState          *project.State
 	Template              *template.Template
 	TemplateCtx           template.Context
@@ -109,10 +113,12 @@ type TemplatePlan struct {
 	renameOp      *local.PathsGenerator
 	saveOp        *local.UnitOfWork
 	modified      ModifiedObjects
+	result        *Result
 }
 
 type Result struct {
 	InstanceID string
+	ConfigID   string
 	Warnings   []string
 }
 
@@ -203,6 +209,20 @@ func PrepareTemplate(ctx context.Context, d dependencies, o ExtendedOptions) (pl
 		existingObjects[objectState.Key()] = true
 		plan.modified = append(plan.modified, ModifiedObject{ObjectState: objectState, OpMark: opMark})
 
+		if objectState.Kind().IsConfig() {
+			// Change config name that is used in the template instead of meta.json one
+			if plan.options.ConfigName != "" {
+				config := objectState.(*model.ConfigState)
+				config.Local.Name = plan.options.ConfigName
+			}
+
+			// Save config ID
+			configID := objectState.ObjectID()
+			if plan.result == nil {
+				plan.result = &Result{ConfigID: configID}
+			}
+		}
+
 		// Save to filesystem
 		plan.saveOp.SaveObject(objectState, objectState.LocalState(), model.NewChangedFields())
 	}
@@ -255,7 +275,7 @@ func (p *TemplatePlan) Invoke(ctx context.Context) (*Result, error) {
 	}
 
 	// Log new objects
-	p.modified.Log(logger, p.options.Template)
+	p.modified.Log(p.deps.Stdout(), p.options.Template)
 
 	// Normalize paths
 	if _, err := rename.Run(ctx, p.options.ProjectState, rename.Options{DryRun: false, LogEmpty: false}, p.deps); err != nil {
@@ -264,20 +284,25 @@ func (p *TemplatePlan) Invoke(ctx context.Context) (*Result, error) {
 
 	// Validate schemas and encryption
 	if err := validate.Run(ctx, p.options.ProjectState, validate.Options{ValidateSecrets: !p.options.SkipSecretsValidation, ValidateJSONSchema: true}, p.deps); err != nil {
-		logger.Warn(errors.Format(errors.PrefixError(err, "warning"), errors.FormatAsSentences()))
-		logger.Warn()
-		logger.Warnf(`Please correct the problems listed above.`)
-		logger.Warnf(`Push operation is only possible when project is valid.`)
+		logger.Warn(ctx, errors.Format(errors.PrefixError(err, "warning"), errors.FormatAsSentences()))
+		logger.Warn(ctx, "")
+		logger.Warn(ctx, `Please correct the problems listed above.`)
+		logger.Warn(ctx, `Push operation is only possible when project is valid.`)
 	}
 
-	result := &Result{InstanceID: p.options.InstanceID}
+	result := p.result
+	if result == nil {
+		result = &Result{InstanceID: p.options.InstanceID}
+	} else {
+		result.InstanceID = p.options.InstanceID
+	}
 
 	// Return urls to oauth configurations
 	if tmplCtx, ok := p.options.TemplateCtx.(interface{ InputsUsage() *metadata.InputsUsage }); ok {
 		var oauthWarnings []string
 		inputValuesMap := p.options.Inputs.ToMap()
 		for inputName, cKey := range tmplCtx.InputsUsage().OAuthConfigsMap() {
-			if len(inputValuesMap[inputName].Value.(map[string]interface{})) == 0 {
+			if len(inputValuesMap[inputName].Value.(map[string]any)) == 0 {
 				oauthWarnings = append(oauthWarnings, fmt.Sprintf("- %s/admin/projects/%d/components/%s/%s", p.deps.StorageAPIHost(), p.deps.ProjectID(), cKey.ComponentID, cKey.ID))
 			}
 		}
@@ -288,9 +313,9 @@ func (p *TemplatePlan) Invoke(ctx context.Context) (*Result, error) {
 
 	// Log success
 	if p.options.Upgrade {
-		logger.Info(fmt.Sprintf(`Template instance "%s" has been upgraded to "%s".`, p.options.InstanceID, p.options.Template.FullName()))
+		logger.Infof(ctx, `Template instance "%s" has been upgraded to "%s".`, p.options.InstanceID, p.options.Template.FullName())
 	} else {
-		logger.Info(fmt.Sprintf(`Template "%s" has been applied, instance ID: %s`, p.options.Template.FullName(), p.options.InstanceID))
+		logger.Infof(ctx, `Template "%s" has been applied, instance ID: %s`, p.options.Template.FullName(), p.options.InstanceID)
 	}
 
 	return result, nil
@@ -362,14 +387,15 @@ type ModifiedObject struct {
 
 type ModifiedObjects []ModifiedObject
 
-func (v ModifiedObjects) Log(logger log.Logger, tmpl *template.Template) {
+func (v ModifiedObjects) Log(w io.Writer, tmpl *template.Template) {
 	sort.SliceStable(v, func(i, j int) bool {
 		return v[i].Path() < v[j].Path()
 	})
 
-	writer := logger.InfoWriter()
-	writer.WriteString(fmt.Sprintf(`Objects from "%s" template:`, tmpl.FullName()))
+	fmt.Fprintf(w, `Objects from "%s" template:`, tmpl.FullName())
+	fmt.Fprintln(w)
 	for _, o := range v {
-		writer.WriteStringIndent(1, fmt.Sprintf("%s %s %s", o.OpMark, o.Kind().Abbr, o.Path()))
+		fmt.Fprintf(w, "  %s %s %s", o.OpMark, o.Kind().Abbr, o.Path())
+		fmt.Fprintln(w)
 	}
 }

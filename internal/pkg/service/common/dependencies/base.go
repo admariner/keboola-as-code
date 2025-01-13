@@ -2,8 +2,9 @@ package dependencies
 
 import (
 	"context"
+	"io"
 
-	"github.com/benbjohnson/clock"
+	"github.com/jonboulle/clockwork"
 	"github.com/keboola/go-client/pkg/client"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/log"
@@ -17,22 +18,44 @@ import (
 type baseScope struct {
 	logger     log.Logger
 	telemetry  telemetry.Telemetry
-	clock      clock.Clock
+	stdout     io.Writer
+	stderr     io.Writer
+	clock      clockwork.Clock
 	httpClient client.Client
 	validator  validator.Validator
 	process    *servicectx.Process
 }
 
-func NewBaseScope(ctx context.Context, logger log.Logger, tel telemetry.Telemetry, clk clock.Clock, process *servicectx.Process, httpClient client.Client) BaseScope {
-	return newBaseScope(ctx, logger, tel, clk, process, httpClient)
+func NewBaseScope(
+	ctx context.Context,
+	logger log.Logger,
+	tel telemetry.Telemetry,
+	stdout io.Writer,
+	stderr io.Writer,
+	clk clockwork.Clock,
+	process *servicectx.Process,
+	httpClient client.Client,
+) BaseScope {
+	return newBaseScope(ctx, logger, tel, stdout, stderr, clk, process, httpClient)
 }
 
-func newBaseScope(ctx context.Context, logger log.Logger, tel telemetry.Telemetry, clk clock.Clock, process *servicectx.Process, httpClient client.Client) *baseScope {
+func newBaseScope(
+	ctx context.Context,
+	logger log.Logger,
+	tel telemetry.Telemetry,
+	stdout io.Writer,
+	stderr io.Writer,
+	clk clockwork.Clock,
+	process *servicectx.Process,
+	httpClient client.Client,
+) *baseScope {
 	_, span := tel.Tracer().Start(ctx, "keboola.go.common.dependencies.NewBaseScope")
 	defer span.End(nil)
 	return &baseScope{
 		logger:     logger,
 		telemetry:  tel,
+		stdout:     stdout,
+		stderr:     stderr,
 		clock:      clk,
 		process:    process,
 		httpClient: httpClient,
@@ -56,7 +79,7 @@ func (v *baseScope) Telemetry() telemetry.Telemetry {
 	return v.telemetry
 }
 
-func (v *baseScope) Clock() clock.Clock {
+func (v *baseScope) Clock() clockwork.Clock {
 	v.check()
 	return v.clock
 }
@@ -74,4 +97,14 @@ func (v *baseScope) HTTPClient() client.Client {
 func (v *baseScope) Validator() validator.Validator {
 	v.check()
 	return v.validator
+}
+
+func (v *baseScope) Stdout() io.Writer {
+	v.check()
+	return v.stdout
+}
+
+func (v *baseScope) Stderr() io.Writer {
+	v.check()
+	return v.stderr
 }

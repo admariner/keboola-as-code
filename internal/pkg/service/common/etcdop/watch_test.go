@@ -11,10 +11,12 @@ import (
 	"github.com/davecgh/go-spew/spew"
 	"github.com/keboola/go-utils/pkg/wildcards"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	"go.etcd.io/etcd/tests/v3/integration"
 	"google.golang.org/grpc/connectivity"
 
+	"github.com/keboola/keboola-as-code/internal/pkg/utils/errors"
 	"github.com/keboola/keboola-as-code/internal/pkg/utils/etcdhelper"
 )
 
@@ -25,18 +27,18 @@ func TestPrefix_Watch(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	c := etcdhelper.ClientForTest(t, etcdhelper.TmpNamespace(t))
+	client := etcdhelper.ClientForTest(t, etcdhelper.TmpNamespace(t))
 	pfx := prefixForTest()
 
 	// Create watcher
-	stream := pfx.Watch(ctx, c)
+	stream := pfx.Watch(ctx, client)
 	ch := stream.Channel()
 
 	// Wait for watcher created event
 	assertDone(t, func() {
 		resp := <-ch
 		assert.True(t, resp.Created)
-		assert.NoError(t, resp.InitErr)
+		require.NoError(t, resp.InitErr)
 		assert.Empty(t, resp.Events)
 	}, "watcher created timeout")
 
@@ -44,78 +46,89 @@ func TestPrefix_Watch(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		assert.NoError(t, pfx.Key("key1").Put("foo").Do(ctx, c))
+		require.NoError(t, pfx.Key("key1").Put(client, "foo").Do(ctx).Err())
 	}()
 
 	// Wait for CREATE event
 	assertDone(t, func() {
-		expected := WatchEvent{}
+		expected := WatchEvent[[]byte]{}
 		expected.Type = CreateEvent
+		expected.Key = "my/prefix/key1"
+		expected.Value = []byte("foo")
 		expected.Kv = &mvccpb.KeyValue{
 			Key:   []byte("my/prefix/key1"),
 			Value: []byte("foo"),
 		}
 		resp := <-ch
 		assert.False(t, resp.Created)
-		assert.NoError(t, resp.InitErr)
-		assert.Equal(t, WatchResponse{Events: []WatchEvent{expected}}, clearResponse(resp))
+		require.NoError(t, resp.InitErr)
+		assert.Equal(t, WatchResponseRaw{Events: []WatchEvent[[]byte]{expected}}, clearResponse(resp))
 	}, "CREATE timeout")
 
 	// UPDATE key
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		assert.NoError(t, pfx.Key("key1").Put("new").Do(ctx, c))
+		require.NoError(t, pfx.Key("key1").Put(client, "new").Do(ctx).Err())
 	}()
 
 	// Wait for UPDATE event
 	assertDone(t, func() {
-		expected := WatchEvent{}
+		expected := WatchEvent[[]byte]{}
 		expected.Type = UpdateEvent
+		expected.Key = "my/prefix/key1"
+		expected.Value = []byte("new")
 		expected.Kv = &mvccpb.KeyValue{
 			Key:   []byte("my/prefix/key1"),
 			Value: []byte("new"),
 		}
 		resp := <-ch
 		assert.False(t, resp.Created)
-		assert.NoError(t, resp.InitErr)
-		assert.Equal(t, WatchResponse{Events: []WatchEvent{expected}}, clearResponse(resp))
+		require.NoError(t, resp.InitErr)
+		assert.Equal(t, WatchResponseRaw{Events: []WatchEvent[[]byte]{expected}}, clearResponse(resp))
 	}, "UPDATE timeout")
 
 	// DELETE key
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		ok, err := pfx.Key("key1").Delete().Do(ctx, c)
-		assert.NoError(t, err)
+		ok, err := pfx.Key("key1").Delete(client).Do(ctx).ResultOrErr()
+		require.NoError(t, err)
 		assert.True(t, ok)
 	}()
 
 	// Wait for DELETE event
 	assertDone(t, func() {
-		expected := WatchEvent{}
+		expected := WatchEvent[[]byte]{}
 		expected.Type = DeleteEvent
+		expected.Key = "my/prefix/key1"
 		expected.Kv = &mvccpb.KeyValue{
 			Key: []byte("my/prefix/key1"),
 		}
 		resp := <-ch
 		assert.False(t, resp.Created)
-		assert.NoError(t, resp.InitErr)
-		assert.Equal(t, WatchResponse{Events: []WatchEvent{expected}}, clearResponse(resp))
+		require.NoError(t, resp.InitErr)
+		assert.Equal(t, WatchResponseRaw{Events: []WatchEvent[[]byte]{expected}}, clearResponse(resp))
 	}, "DELETE timeout")
 
 	// Manual RESTART
 	assertDone(t, func() {
 		// Trigger manual restart
-		stream.Restart()
+		stream.Restart(errors.New("some cause"))
 
 		// Receive the restarted event
 		resp := <-ch
 		assert.True(t, resp.Restarted)
-		wildcards.Assert(t, "manual restart", resp.RestartReason)
+		if assert.Error(t, resp.RestartCause) {
+			assert.Equal(t, "some cause", resp.RestartCause.Error())
+		}
+
+		// Receive the created event
+		resp = <-ch
+		assert.True(t, resp.Created)
 
 		// Add a new key
-		assert.NoError(t, pfx.Key("key3").Put("new").Do(ctx, c))
+		require.NoError(t, pfx.Key("key3").Put(client, "new").Do(ctx).Err())
 
 		// Receive the new key
 		resp = <-ch
@@ -140,35 +153,37 @@ func TestPrefix_GetAllAndWatch(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	c := etcdhelper.ClientForTest(t, etcdhelper.TmpNamespace(t))
+	client := etcdhelper.ClientForTest(t, etcdhelper.TmpNamespace(t))
 	pfx := prefixForTest()
 
 	// CREATE key1
-	assert.NoError(t, pfx.Key("key1").Put("foo1").Do(ctx, c))
+	require.NoError(t, pfx.Key("key1").Put(client, "foo1").Do(ctx).Err())
 
 	// Create watcher
-	stream := pfx.GetAllAndWatch(ctx, c)
+	stream := pfx.GetAllAndWatch(ctx, client)
 	ch := stream.Channel()
 
 	// Wait for CREATE key1 event
 	assertDone(t, func() {
-		expected := WatchEvent{}
+		expected := WatchEvent[[]byte]{}
 		expected.Type = CreateEvent
+		expected.Key = "my/prefix/key1"
+		expected.Value = []byte("foo1")
 		expected.Kv = &mvccpb.KeyValue{
 			Key:   []byte("my/prefix/key1"),
 			Value: []byte("foo1"),
 		}
 		resp := <-ch
 		assert.False(t, resp.Created)
-		assert.NoError(t, resp.InitErr)
-		assert.Equal(t, WatchResponse{Events: []WatchEvent{expected}}, clearResponse(resp))
+		require.NoError(t, resp.InitErr)
+		assert.Equal(t, WatchResponseRaw{Events: []WatchEvent[[]byte]{expected}}, clearResponse(resp))
 	}, "CREATE1 timeout")
 
 	// Wait for watcher created event
 	assertDone(t, func() {
 		resp := <-ch
 		assert.True(t, resp.Created)
-		assert.NoError(t, resp.InitErr)
+		require.NoError(t, resp.InitErr)
 		assert.Empty(t, resp.Events)
 	}, "watcher created timeout")
 
@@ -176,75 +191,82 @@ func TestPrefix_GetAllAndWatch(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		assert.NoError(t, pfx.Key("key2").Put("foo2").Do(ctx, c))
+		require.NoError(t, pfx.Key("key2").Put(client, "foo2").Do(ctx).Err())
 	}()
 
 	// Wait for CREATE key1 event
 	assertDone(t, func() {
-		expected := WatchEvent{}
+		expected := WatchEvent[[]byte]{}
 		expected.Type = CreateEvent
+		expected.Key = "my/prefix/key2"
+		expected.Value = []byte("foo2")
 		expected.Kv = &mvccpb.KeyValue{
 			Key:   []byte("my/prefix/key2"),
 			Value: []byte("foo2"),
 		}
 		resp := <-ch
 		assert.False(t, resp.Created)
-		assert.NoError(t, resp.InitErr)
-		assert.Equal(t, WatchResponse{Events: []WatchEvent{expected}}, clearResponse(resp))
+		require.NoError(t, resp.InitErr)
+		assert.Equal(t, WatchResponseRaw{Events: []WatchEvent[[]byte]{expected}}, clearResponse(resp))
 	}, "CREATE2 timeout")
 
 	// UPDATE key
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		assert.NoError(t, pfx.Key("key2").Put("new").Do(ctx, c))
+		require.NoError(t, pfx.Key("key2").Put(client, "new").Do(ctx).Err())
 	}()
 
 	// Wait for UPDATE event
 	assertDone(t, func() {
-		expected := WatchEvent{}
+		expected := WatchEvent[[]byte]{}
 		expected.Type = UpdateEvent
+		expected.Key = "my/prefix/key2"
+		expected.Value = []byte("new")
 		expected.Kv = &mvccpb.KeyValue{
 			Key:   []byte("my/prefix/key2"),
 			Value: []byte("new"),
 		}
 		resp := <-ch
 		assert.False(t, resp.Created)
-		assert.NoError(t, resp.InitErr)
-		assert.Equal(t, WatchResponse{Events: []WatchEvent{expected}}, clearResponse(resp))
+		require.NoError(t, resp.InitErr)
+		assert.Equal(t, WatchResponseRaw{Events: []WatchEvent[[]byte]{expected}}, clearResponse(resp))
 	}, "UPDATE timeout")
 
 	// DELETE key
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		ok, err := pfx.Key("key1").Delete().Do(ctx, c)
-		assert.NoError(t, err)
+		ok, err := pfx.Key("key1").Delete(client).Do(ctx).ResultOrErr()
+		require.NoError(t, err)
 		assert.True(t, ok)
 	}()
 
 	// Wait for DELETE event
 	assertDone(t, func() {
-		expected := WatchEvent{}
+		expected := WatchEvent[[]byte]{}
 		expected.Type = DeleteEvent
+		expected.Key = "my/prefix/key1"
 		expected.Kv = &mvccpb.KeyValue{
 			Key: []byte("my/prefix/key1"),
 		}
 		resp := <-ch
 		assert.False(t, resp.Created)
-		assert.NoError(t, resp.InitErr)
-		assert.Equal(t, WatchResponse{Events: []WatchEvent{expected}}, clearResponse(resp))
+		require.NoError(t, resp.InitErr)
+		assert.Equal(t, WatchResponseRaw{Events: []WatchEvent[[]byte]{expected}}, clearResponse(resp))
 	}, "DELETE timeout")
 
 	// Manual RESTART
 	assertDone(t, func() {
 		// Trigger manual restart
-		stream.Restart()
+		stream.Restart(errors.New("some cause"))
 
 		// Receive the restart event
 		resp := <-ch
 		assert.True(t, resp.Restarted)
-		assert.Equal(t, "manual restart", resp.RestartReason)
+		if assert.Error(t, resp.RestartCause) {
+			assert.Equal(t, "some cause", resp.RestartCause.Error())
+		}
 
 		// Receive all keys
 		resp = <-ch
@@ -253,7 +275,11 @@ func TestPrefix_GetAllAndWatch(t *testing.T) {
 		}
 
 		// Add a new key
-		assert.NoError(t, pfx.Key("key3").Put("new").Do(ctx, c))
+		require.NoError(t, pfx.Key("key3").Put(client, "new").Do(ctx).Err())
+
+		// Receive the restarted event
+		resp = <-ch
+		assert.True(t, resp.Created)
 
 		// Receive the new key
 		resp = <-ch
@@ -293,13 +319,13 @@ func TestPrefix_Watch_ErrCompacted(t *testing.T) {
 	pfx := prefixForTest()
 	stream := pfx.Watch(ctx, watchClient)
 	ch := stream.Channel()
-	receive := func(expectedLen int) WatchResponse {
+	receive := func(expectedLen int) WatchResponseRaw {
 		resp, ok := <-ch
 		assert.True(t, ok)
 		assert.False(t, resp.Created)
 		assert.False(t, resp.Restarted)
-		assert.NoError(t, resp.InitErr)
-		assert.NoError(t, resp.Err)
+		require.NoError(t, resp.InitErr)
+		require.NoError(t, resp.Err)
 		assert.Len(t, resp.Events, expectedLen)
 		return resp
 	}
@@ -310,7 +336,7 @@ func TestPrefix_Watch_ErrCompacted(t *testing.T) {
 
 	// Add some key
 	value := "value"
-	assert.NoError(t, pfx.Key("key01").Put(value).Do(ctx, testClient))
+	require.NoError(t, pfx.Key("key01").Put(testClient, value).Do(ctx).Err())
 
 	// Read key
 	assert.Equal(t, []byte("my/prefix/key01"), receive(1).Events[0].Kv.Key)
@@ -318,59 +344,69 @@ func TestPrefix_Watch_ErrCompacted(t *testing.T) {
 	// Close watcher connection and block a new one
 	watchMember.Bridge().PauseConnections()
 	watchMember.Bridge().DropConnections()
-	assert.Eventually(t, func() bool {
-		return watchClient.ActiveConnection().GetState() == connectivity.Connecting
+	assert.EventuallyWithT(t, func(c *assert.CollectT) {
+		assert.Equal(c, connectivity.Connecting, watchClient.ActiveConnection().GetState())
 	}, 5*time.Second, 100*time.Millisecond)
 
 	// Add some other keys, during the watcher is disconnected
-	assert.NoError(t, pfx.Key("key02").Put(value).Do(ctx, testClient))
-	assert.NoError(t, pfx.Key("key03").Put(value).Do(ctx, testClient))
+	require.NoError(t, pfx.Key("key02").Put(testClient, value).Do(ctx).Err())
+	require.NoError(t, pfx.Key("key03").Put(testClient, value).Do(ctx).Err())
 
 	// Compact, during the watcher is disconnected
 	status, err := testClient.Status(ctx, testClient.Endpoints()[0])
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	_, err = testClient.Compact(ctx, status.Header.Revision)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Unblock dialer, watcher will be reconnected
 	watchMember.Bridge().UnpauseConnections()
 
 	// Expect ErrCompacted, all the keys were merged into one revision, it is not possible to load only the missing ones
 	resp = <-ch
-	assert.Error(t, resp.Err)
+	require.Error(t, resp.Err)
 	assert.Equal(t, "watch error: etcdserver: mvcc: required revision has been compacted", resp.Err.Error())
 
 	// Expect "restarted" event
 	resp = <-ch
 	assert.True(t, resp.Restarted)
-	wildcards.Assert(t, "backoff delay %s, reason: watch error: etcdserver: mvcc: required revision has been compacted", resp.RestartReason)
+	if assert.Error(t, resp.RestartCause) {
+		wildcards.Assert(t, "unexpected restart, backoff delay %s, cause:\n- watch error: etcdserver: mvcc: required revision has been compacted", resp.RestartCause.Error())
+	}
+
+	// Expect "created" event
+	resp = <-ch
+	assert.True(t, resp.Created)
 
 	// After the restart, Watch is waiting for new events, put and expected the key
-	assert.NoError(t, pfx.Key("key04").Put(value).Do(ctx, testClient))
+	require.NoError(t, pfx.Key("key04").Put(testClient, value).Do(ctx).Err())
 	assert.Equal(t, []byte("my/prefix/key04"), receive(1).Events[0].Kv.Key)
 
 	// And let's try compact operation again, in the same way
 	watchMember.Bridge().PauseConnections()
 	watchMember.Bridge().DropConnections()
-	assert.Eventually(t, func() bool {
-		return watchClient.ActiveConnection().GetState() == connectivity.Connecting
+	assert.EventuallyWithT(t, func(c *assert.CollectT) {
+		assert.Equal(c, connectivity.Connecting, watchClient.ActiveConnection().GetState())
 	}, 5*time.Second, 100*time.Millisecond)
-	assert.NoError(t, pfx.Key("key05").Put(value).Do(ctx, testClient))
-	assert.NoError(t, pfx.Key("key06").Put(value).Do(ctx, testClient))
+	require.NoError(t, pfx.Key("key05").Put(testClient, value).Do(ctx).Err())
+	require.NoError(t, pfx.Key("key06").Put(testClient, value).Do(ctx).Err())
 	status, err = testClient.Status(ctx, testClient.Endpoints()[0])
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	_, err = testClient.Compact(ctx, status.Header.Revision)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	watchMember.Bridge().UnpauseConnections()
 	resp = <-ch
-	assert.Error(t, resp.Err)
+	require.Error(t, resp.Err)
 	assert.Equal(t, "watch error: etcdserver: mvcc: required revision has been compacted", resp.Err.Error())
 	resp = <-ch
 	assert.True(t, resp.Restarted)
-	wildcards.Assert(t, "backoff delay %s, reason: watch error: etcdserver: mvcc: required revision has been compacted", resp.RestartReason)
+	if assert.Error(t, resp.RestartCause) {
+		wildcards.Assert(t, "unexpected restart, backoff delay %s, cause:\n- watch error: etcdserver: mvcc: required revision has been compacted", resp.RestartCause.Error())
+	}
+	resp = <-ch
+	assert.True(t, resp.Created)
 
 	// After the restart, Watch is streaming new events, put and receive the key
-	assert.NoError(t, pfx.Key("key07").Put(value).Do(ctx, testClient))
+	require.NoError(t, pfx.Key("key07").Put(testClient, value).Do(ctx).Err())
 	assert.Equal(t, []byte("my/prefix/key07"), receive(1).Events[0].Kv.Key)
 
 	// Channel should be closed by the context
@@ -401,13 +437,13 @@ func TestPrefix_GetAllAndWatch_ErrCompacted(t *testing.T) {
 	pfx := prefixForTest()
 	stream := pfx.GetAllAndWatch(ctx, watchClient)
 	ch := stream.Channel()
-	receive := func(expectedLen int) WatchResponse {
+	receive := func(expectedLen int) WatchResponseRaw {
 		resp, ok := <-ch
 		assert.True(t, ok)
 		assert.False(t, resp.Created)
 		assert.False(t, resp.Restarted)
-		assert.NoError(t, resp.InitErr)
-		assert.NoError(t, resp.Err)
+		require.NoError(t, resp.InitErr)
+		require.NoError(t, resp.Err)
 		assert.Len(t, resp.Events, expectedLen)
 		return resp
 	}
@@ -418,7 +454,7 @@ func TestPrefix_GetAllAndWatch_ErrCompacted(t *testing.T) {
 
 	// Add some key
 	value := "value"
-	assert.NoError(t, pfx.Key("key01").Put(value).Do(ctx, testClient))
+	require.NoError(t, pfx.Key("key01").Put(testClient, value).Do(ctx).Err())
 
 	// Read key
 	assert.Equal(t, []byte("my/prefix/key01"), receive(1).Events[0].Kv.Key)
@@ -426,32 +462,35 @@ func TestPrefix_GetAllAndWatch_ErrCompacted(t *testing.T) {
 	// Close watcher connection and block a new one
 	watchMember.Bridge().PauseConnections()
 	watchMember.Bridge().DropConnections()
-	assert.Eventually(t, func() bool {
-		return watchClient.ActiveConnection().GetState() == connectivity.Connecting
+	assert.EventuallyWithT(t, func(c *assert.CollectT) {
+		assert.Equal(c, connectivity.Connecting, watchClient.ActiveConnection().GetState())
 	}, 5*time.Second, 100*time.Millisecond)
 
 	// Add some other keys, during the watcher is disconnected
-	assert.NoError(t, pfx.Key("key02").Put(value).Do(ctx, testClient))
-	assert.NoError(t, pfx.Key("key03").Put(value).Do(ctx, testClient))
+	require.NoError(t, pfx.Key("key02").Put(testClient, value).Do(ctx).Err())
+	require.NoError(t, pfx.Key("key03").Put(testClient, value).Do(ctx).Err())
 
 	// Compact, during the watcher is disconnected
 	status, err := testClient.Status(ctx, testClient.Endpoints()[0])
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	_, err = testClient.Compact(ctx, status.Header.Revision)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Unblock dialer, watcher will be reconnected
 	watchMember.Bridge().UnpauseConnections()
 
 	// Expect ErrCompacted, all the keys were merged into one revision, it is not possible to load only the missing ones
 	resp = <-ch
-	assert.Error(t, resp.Err)
+	require.Error(t, resp.Err)
 	assert.Equal(t, "watch error: etcdserver: mvcc: required revision has been compacted", resp.Err.Error())
 
 	// Expect "restarted" event
 	resp = <-ch
 	assert.True(t, resp.Restarted)
-	wildcards.Assert(t, "backoff delay %s, reason: watch error: etcdserver: mvcc: required revision has been compacted", resp.RestartReason)
+	assert.True(t, resp.Restarted)
+	if assert.Error(t, resp.RestartCause) {
+		wildcards.Assert(t, "unexpected restart, backoff delay %s, cause:\n- watch error: etcdserver: mvcc: required revision has been compacted", resp.RestartCause.Error())
+	}
 
 	// Read keys, watcher was restarted, it is now in the GetAll phase,
 	// so all keys are received at once
@@ -461,7 +500,11 @@ func TestPrefix_GetAllAndWatch_ErrCompacted(t *testing.T) {
 	assert.Equal(t, []byte("my/prefix/key03"), resp.Events[2].Kv.Key)
 
 	// Add key
-	assert.NoError(t, pfx.Key("key04").Put(value).Do(ctx, testClient))
+	require.NoError(t, pfx.Key("key04").Put(testClient, value).Do(ctx).Err())
+
+	// Expect "created" event, transition from the GetAll to the Watch phase
+	resp = <-ch
+	assert.True(t, resp.Created)
 
 	// Read keys
 	assert.Equal(t, []byte("my/prefix/key04"), receive(1).Events[0].Kv.Key)
@@ -469,22 +512,24 @@ func TestPrefix_GetAllAndWatch_ErrCompacted(t *testing.T) {
 	// And let's try compact operation again, in the same way
 	watchMember.Bridge().PauseConnections()
 	watchMember.Bridge().DropConnections()
-	assert.Eventually(t, func() bool {
-		return watchClient.ActiveConnection().GetState() == connectivity.Connecting
+	assert.EventuallyWithT(t, func(c *assert.CollectT) {
+		assert.Equal(c, connectivity.Connecting, watchClient.ActiveConnection().GetState())
 	}, 5*time.Second, 100*time.Millisecond)
-	assert.NoError(t, pfx.Key("key05").Put(value).Do(ctx, testClient))
-	assert.NoError(t, pfx.Key("key06").Put(value).Do(ctx, testClient))
+	require.NoError(t, pfx.Key("key05").Put(testClient, value).Do(ctx).Err())
+	require.NoError(t, pfx.Key("key06").Put(testClient, value).Do(ctx).Err())
 	status, err = testClient.Status(ctx, testClient.Endpoints()[0])
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	_, err = testClient.Compact(ctx, status.Header.Revision)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	watchMember.Bridge().UnpauseConnections()
 	resp = <-ch
-	assert.Error(t, resp.Err)
+	require.Error(t, resp.Err)
 	assert.Equal(t, "watch error: etcdserver: mvcc: required revision has been compacted", resp.Err.Error())
 	resp = <-ch
 	assert.True(t, resp.Restarted)
-	wildcards.Assert(t, "backoff delay %s, reason: watch error: etcdserver: mvcc: required revision has been compacted", resp.RestartReason)
+	if assert.Error(t, resp.RestartCause) {
+		wildcards.Assert(t, "unexpected restart, backoff delay %s, cause:\n- watch error: etcdserver: mvcc: required revision has been compacted", resp.RestartCause.Error())
+	}
 	resp = receive(6)
 	assert.Equal(t, []byte("my/prefix/key01"), resp.Events[0].Kv.Key)
 	assert.Equal(t, []byte("my/prefix/key02"), resp.Events[1].Kv.Key)
@@ -492,6 +537,8 @@ func TestPrefix_GetAllAndWatch_ErrCompacted(t *testing.T) {
 	assert.Equal(t, []byte("my/prefix/key04"), resp.Events[3].Kv.Key)
 	assert.Equal(t, []byte("my/prefix/key05"), resp.Events[4].Kv.Key)
 	assert.Equal(t, []byte("my/prefix/key06"), resp.Events[5].Kv.Key)
+	resp = <-ch
+	assert.True(t, resp.Created)
 
 	// Channel should be closed by the context
 	cancel()
@@ -506,8 +553,8 @@ func TestWatchBackoff(t *testing.T) {
 	b.RandomizationFactor = 0
 
 	// Get all delays without sleep
-	var delays []time.Duration
-	for i := 0; i < 14; i++ {
+	delays := make([]time.Duration, 0, 14)
+	for range 14 {
 		delay := b.NextBackOff()
 		if delay == backoff.Stop {
 			assert.Fail(t, "unexpected stop")
@@ -535,9 +582,11 @@ func TestWatchBackoff(t *testing.T) {
 	}, delays)
 }
 
-func clearResponse(resp WatchResponse) WatchResponse {
+func clearResponse(resp WatchResponseRaw) WatchResponseRaw {
 	for i := range resp.Events {
 		event := &resp.Events[i]
+		event.Key = string(event.Kv.Key)
+		event.Value = event.Kv.Value
 		event.Kv.CreateRevision = 0
 		event.Kv.ModRevision = 0
 		event.Kv.Version = 0

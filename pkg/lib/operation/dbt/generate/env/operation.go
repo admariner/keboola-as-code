@@ -14,13 +14,14 @@ import (
 )
 
 type Options struct {
+	BranchKey  keboola.BranchKey
 	TargetName string
 	Workspace  *keboola.Workspace
 	Buckets    []listbuckets.Bucket // optional, set if the buckets have been loaded in a parent command
 }
 
 type dependencies interface {
-	KeboolaProjectAPI() *keboola.API
+	KeboolaProjectAPI() *keboola.AuthorizedAPI
 	LocalDbtProject(ctx context.Context) (*dbt.Project, bool, error)
 	Logger() log.Logger
 	Telemetry() telemetry.Telemetry
@@ -36,7 +37,7 @@ func Run(ctx context.Context, o Options, d dependencies) (err error) {
 	}
 
 	// List bucket, if not set
-	o.Buckets, err = listbuckets.Run(ctx, listbuckets.Options{TargetName: o.TargetName}, d)
+	o.Buckets, err = listbuckets.Run(ctx, listbuckets.Options{BranchKey: o.BranchKey, TargetName: o.TargetName}, d)
 	if err != nil {
 		return errors.Errorf("could not list buckets: %w", err)
 	}
@@ -55,34 +56,34 @@ func Run(ctx context.Context, o Options, d dependencies) (err error) {
 
 	// Print ENVs
 	l := d.Logger()
-	l.Infof(`Commands to set environment for the dbt target:`)
-	l.Infof(`  export DBT_KBC_%s_TYPE=%s`, targetUpper, workspace.Type)
-	l.Infof(`  export DBT_KBC_%s_SCHEMA=%s`, targetUpper, workspace.Details.Connection.Schema)
-	l.Infof(`  export DBT_KBC_%s_WAREHOUSE=%s`, targetUpper, workspace.Details.Connection.Warehouse)
-	l.Infof(`  export DBT_KBC_%s_DATABASE=%s`, targetUpper, workspace.Details.Connection.Database)
+	l.Infof(ctx, `Commands to set environment for the dbt target:`)
+	l.Infof(ctx, `  export DBT_KBC_%s_TYPE=%s`, targetUpper, workspace.Type)
+	l.Infof(ctx, `  export DBT_KBC_%s_SCHEMA=%s`, targetUpper, workspace.Details.Connection.Schema)
+	l.Infof(ctx, `  export DBT_KBC_%s_WAREHOUSE=%s`, targetUpper, workspace.Details.Connection.Warehouse)
+	l.Infof(ctx, `  export DBT_KBC_%s_DATABASE=%s`, targetUpper, workspace.Details.Connection.Database)
 
 	linkedBucketEnvsMap := make(map[string]bool)
 	for _, bucket := range o.Buckets {
 		if bucket.LinkedProjectID != 0 && !linkedBucketEnvsMap[bucket.DatabaseEnv] {
 			stackPrefix, _, _ := strings.Cut(workspace.Details.Connection.Database, "_") // SAPI_..., KEBOOLA_..., etc.
 			linkedBucketEnvsMap[bucket.DatabaseEnv] = true                               // print only once
-			l.Infof(`  export %s=%s_%d`, bucket.DatabaseEnv, stackPrefix, bucket.LinkedProjectID)
+			l.Infof(ctx, `  export %s=%s_%d`, bucket.DatabaseEnv, stackPrefix, bucket.LinkedProjectID)
 		}
 	}
-	l.Infof(`  export DBT_KBC_%s_ACCOUNT=%s`, targetUpper, host)
-	l.Infof(`  export DBT_KBC_%s_USER=%s`, targetUpper, workspace.User)
-	l.Infof(`  export DBT_KBC_%s_PASSWORD=%s`, targetUpper, workspace.Password)
+	l.Infof(ctx, `  export DBT_KBC_%s_ACCOUNT=%s`, targetUpper, host)
+	l.Infof(ctx, `  export DBT_KBC_%s_USER=%s`, targetUpper, workspace.User)
+	l.Infof(ctx, `  export DBT_KBC_%s_PASSWORD=%s`, targetUpper, workspace.Password)
 
 	if len(linkedBucketEnvsMap) > 0 {
 		var linkedBucketEnvs []string
 		for env := range linkedBucketEnvsMap {
 			linkedBucketEnvs = append(linkedBucketEnvs, env)
 		}
-		l.Info()
-		l.Info("Note:")
-		l.Info("  The project contains linked buckets that are shared from other projects.")
-		l.Info("  Each project has a different database, so additional environment variables")
-		l.Infof("  have been generated: \"%s\"", strings.Join(linkedBucketEnvs, `", "`))
+		l.Info(ctx, "")
+		l.Info(ctx, "Note:")
+		l.Info(ctx, "  The project contains linked buckets that are shared from other projects.")
+		l.Info(ctx, "  Each project has a different database, so additional environment variables")
+		l.Infof(ctx, "  have been generated: \"%s\"", strings.Join(linkedBucketEnvs, `", "`))
 	}
 
 	return nil

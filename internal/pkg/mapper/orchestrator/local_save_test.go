@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/encoding/json"
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem"
@@ -22,11 +23,11 @@ func TestOrchestratorMapper_MapBeforeLocalSave(t *testing.T) {
 	recipe := model.NewLocalSaveRecipe(orchestratorConfigState.Manifest(), orchestratorConfigState.Remote, model.NewChangedFields())
 
 	// Save
-	assert.NoError(t, state.Mapper().MapBeforeLocalSave(context.Background(), recipe))
+	require.NoError(t, state.Mapper().MapBeforeLocalSave(context.Background(), recipe))
 	assert.Empty(t, logger.WarnAndErrorMessages())
 
 	// Minify JSON + remove file description
-	var files []filesystem.File
+	files := make([]filesystem.File, 0, len(recipe.Files.All()))
 	for _, file := range recipe.Files.All() {
 		var fileRaw *filesystem.RawFile
 		if f, ok := file.(*filesystem.JSONFile); ok {
@@ -36,7 +37,7 @@ func TestOrchestratorMapper_MapBeforeLocalSave(t *testing.T) {
 		} else {
 			var err error
 			fileRaw, err = file.ToRawFile()
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			fileRaw.SetDescription(``)
 		}
 		files = append(files, fileRaw)
@@ -121,7 +122,7 @@ func TestMapBeforeLocalSaveWarnings(t *testing.T) {
 	recipe := model.NewLocalSaveRecipe(orchestratorConfigState.Manifest(), orchestratorConfigState.Remote, model.NewChangedFields())
 
 	// Save
-	assert.NoError(t, state.Mapper().MapBeforeLocalSave(context.Background(), recipe))
+	require.NoError(t, state.Mapper().MapBeforeLocalSave(context.Background(), recipe))
 	expectedWarnings := `
 WARN  Warning:
 - Cannot save orchestrator config "branch/other/orchestrator":
@@ -134,5 +135,5 @@ WARN  Warning:
     - Cannot save task "001-task-4":
       - Config "branch:123/component:foo.bar2/config:456" not found.
 `
-	assert.Equal(t, strings.TrimLeft(expectedWarnings, "\n"), logger.WarnAndErrorMessages())
+	assert.Equal(t, strings.TrimLeft(expectedWarnings, "\n"), logger.AllMessagesTxt())
 }

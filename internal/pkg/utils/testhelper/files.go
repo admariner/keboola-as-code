@@ -15,7 +15,7 @@ func IsIgnoredFile(path string, d filesystem.FileInfo) bool {
 	return !d.IsDir() &&
 		strings.HasPrefix(base, ".") &&
 		!strings.HasPrefix(base, ".env") &&
-		base != ".gitignore"
+		base != ".gitignore" && base != ".kbcignore"
 }
 
 func IsIgnoredDir(path string, d filesystem.FileInfo) bool {
@@ -29,7 +29,7 @@ func IsIgnoredDir(path string, d filesystem.FileInfo) bool {
 //
 // Example:
 //
-//	test/api/buffer
+//	test/api/stream
 //	|- base
 //	   |- endpoint-not-found <- functional test
 //	      |- 001-endpoint

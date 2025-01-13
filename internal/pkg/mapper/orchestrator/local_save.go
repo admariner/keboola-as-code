@@ -25,7 +25,7 @@ func (m *orchestratorMapper) MapBeforeLocalSave(ctx context.Context, recipe *mod
 		config:          recipe.Object.(*model.Config),
 		configPath:      recipe.ObjectManifest.GetAbsPath(),
 	}
-	writer.save()
+	writer.save(ctx)
 	return nil
 }
 
@@ -37,7 +37,7 @@ type localWriter struct {
 	configPath model.AbsPath
 }
 
-func (w *localWriter) save() {
+func (w *localWriter) save(ctx context.Context) {
 	phasesDir := w.NamingGenerator().PhasesDir(w.ObjectManifest.Path())
 
 	// Generate ".gitkeep" to preserve the "phases" directory, even if there are no phases.
@@ -66,7 +66,7 @@ func (w *localWriter) save() {
 	// Convert errors to warning
 	if errs.Len() > 0 {
 		err := errors.PrefixErrorf(errs, `cannot save orchestrator config "%s"`, w.ObjectManifest.Path())
-		w.logger.Warn(errors.Format(errors.PrefixError(err, "warning"), errors.FormatAsSentences()))
+		w.logger.Warn(ctx, errors.Format(errors.PrefixError(err, "warning"), errors.FormatAsSentences()))
 	}
 }
 
@@ -143,7 +143,8 @@ func (w *localWriter) saveTask(task *model.Task) error {
 	}
 
 	// Set configId
-	if len(task.ConfigID) > 0 {
+	switch {
+	case len(task.ConfigID) > 0:
 		// Target key
 		targetKey := &model.ConfigKey{
 			BranchID:    task.BranchID,
@@ -166,10 +167,10 @@ func (w *localWriter) saveTask(task *model.Task) error {
 		} else {
 			errs.Append(errors.Errorf(`%s not found`, targetKey.Desc()))
 		}
-	} else if task.ConfigData != nil {
+	case task.ConfigData != nil:
 		target.Set("configData", task.ConfigData)
 		target.Set(`componentId`, task.ComponentID)
-	} else {
+	default:
 		if task.Enabled {
 			errs.Append(errors.New("task.configId, or task.configData and task.componentId must be specified"))
 		} else {

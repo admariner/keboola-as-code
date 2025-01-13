@@ -12,7 +12,7 @@ import (
 	"github.com/keboola/keboola-as-code/internal/pkg/utils/errors"
 )
 
-func (m *orchestratorMapper) AfterRemoteOperation(_ context.Context, changes *model.RemoteChanges) error {
+func (m *orchestratorMapper) AfterRemoteOperation(ctx context.Context, changes *model.RemoteChanges) error {
 	errs := errors.NewMultiError()
 	allObjects := m.state.RemoteObjects()
 	for _, objectState := range changes.Loaded() {
@@ -21,13 +21,13 @@ func (m *orchestratorMapper) AfterRemoteOperation(_ context.Context, changes *mo
 			continue
 		} else if ok {
 			configState := objectState.(*model.ConfigState)
-			m.onRemoteLoad(configState.Remote, configState.ConfigManifest, allObjects)
+			m.onRemoteLoad(ctx, configState.Remote, configState.ConfigManifest, allObjects)
 		}
 	}
 	return errs.ErrorOrNil()
 }
 
-func (m *orchestratorMapper) onRemoteLoad(config *model.Config, manifest *model.ConfigManifest, allObjects model.Objects) {
+func (m *orchestratorMapper) onRemoteLoad(ctx context.Context, config *model.Config, manifest *model.ConfigManifest, allObjects model.Objects) {
 	loader := &remoteLoader{
 		State:        m.state,
 		phasesSorter: newPhasesSorter(),
@@ -39,7 +39,7 @@ func (m *orchestratorMapper) onRemoteLoad(config *model.Config, manifest *model.
 	if err := loader.load(); err != nil {
 		// Convert errors to warning
 		err = errors.PrefixErrorf(err, `invalid orchestrator %s`, config.Desc())
-		m.logger.Warn(errors.Format(errors.PrefixError(err, "warning"), errors.FormatAsSentences()))
+		m.logger.Warn(ctx, errors.Format(errors.PrefixError(err, "warning"), errors.FormatAsSentences()))
 	}
 }
 
@@ -117,12 +117,12 @@ func (l *remoteLoader) load() error {
 	return l.errors.ErrorOrNil()
 }
 
-func (l *remoteLoader) getPhases() ([]interface{}, error) {
+func (l *remoteLoader) getPhases() ([]any, error) {
 	phasesRaw, found := l.config.Content.Get(model.OrchestratorPhasesContentKey)
 	if !found {
 		return nil, nil
 	}
-	phases, ok := phasesRaw.([]interface{})
+	phases, ok := phasesRaw.([]any)
 	if !ok {
 		return nil, errors.Errorf(`missing "%s" key`, model.OrchestratorPhasesContentKey)
 	}
@@ -130,12 +130,12 @@ func (l *remoteLoader) getPhases() ([]interface{}, error) {
 	return phases, nil
 }
 
-func (l *remoteLoader) getTasks() ([]interface{}, error) {
+func (l *remoteLoader) getTasks() ([]any, error) {
 	tasksRaw, found := l.config.Content.Get(model.OrchestratorTasksContentKey)
 	if !found {
 		return nil, nil
 	}
-	tasks, ok := tasksRaw.([]interface{})
+	tasks, ok := tasksRaw.([]any)
 	if !ok {
 		return nil, errors.Errorf(`missing "%s" key`, model.OrchestratorTasksContentKey)
 	}
@@ -143,7 +143,7 @@ func (l *remoteLoader) getTasks() ([]interface{}, error) {
 	return tasks, nil
 }
 
-func (l *remoteLoader) parsePhase(phaseRaw interface{}) (*model.Phase, string, []string, error) {
+func (l *remoteLoader) parsePhase(phaseRaw any) (*model.Phase, string, []string, error) {
 	errs := errors.NewMultiError()
 	content, ok := phaseRaw.(*orderedmap.OrderedMap)
 	if !ok {
@@ -187,7 +187,7 @@ func (l *remoteLoader) parsePhase(phaseRaw interface{}) (*model.Phase, string, [
 	return phase, cast.ToString(id), dependsOn, errs.ErrorOrNil()
 }
 
-func (l *remoteLoader) parseTask(taskRaw interface{}) error {
+func (l *remoteLoader) parseTask(taskRaw any) error {
 	errs := errors.NewMultiError()
 	content, ok := taskRaw.(*orderedmap.OrderedMap)
 	if !ok {
@@ -226,17 +226,18 @@ func (l *remoteLoader) parseTask(taskRaw interface{}) error {
 
 	// ConfigID / ConfigData
 	if len(task.ComponentID) > 0 {
-		if parser.hasConfigID() {
+		switch {
+		case parser.hasConfigID():
 			task.ConfigID, err = parser.configID()
 			if err != nil {
 				errs.Append(err)
 			}
-		} else if parser.hasConfigData() {
+		case parser.hasConfigData():
 			task.ConfigData, err = parser.configData()
 			if err != nil {
 				errs.Append(err)
 			}
-		} else if task.Enabled {
+		case task.Enabled:
 			errs.Append(errors.New("task.configId, or task.configData and task.componentId must be specified"))
 		}
 	}

@@ -13,6 +13,7 @@ import (
 	"github.com/keboola/go-utils/pkg/orderedmap"
 	"github.com/spf13/cast"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/encoding/json"
 	"github.com/keboola/keboola-as-code/internal/pkg/encoding/jsonnet"
@@ -40,15 +41,15 @@ func TestContext(t *testing.T) {
 		}`),
 	)
 	ctx := context.Background()
-	api, err := keboola.NewAPI(ctx, "https://connection.keboola.com", keboola.WithClient(&c))
-	assert.NoError(t, err)
+	api, err := keboola.NewAuthorizedAPI(ctx, "https://connection.keboola.com", "my-token", keboola.WithClient(&c))
+	require.NoError(t, err)
 	tickets := keboola.NewTicketProvider(ctx, api)
 
 	// Mocked tickets
 	var ticketResponses []*http.Response
 	for i := 1; i <= 2; i++ {
-		response, err := httpmock.NewJsonResponse(200, map[string]interface{}{"id": cast.ToString(1000 + i)})
-		assert.NoError(t, err)
+		response, err := httpmock.NewJsonResponse(200, map[string]any{"id": cast.ToString(1000 + i)})
+		require.NoError(t, err)
 		ticketResponses = append(ticketResponses, response)
 	}
 	httpTransport.RegisterResponder("POST", `=~/storage/tickets`, httpmock.ResponderFromMultipleResponses(ticketResponses))
@@ -92,9 +93,9 @@ func TestContext(t *testing.T) {
 	ctxWithVal := context.WithValue(context.Background(), jsonnetfiles.FileDefCtxKey, fileDef)
 
 	// Create template use context
-	d := dependenciesPkg.NewMocked(t)
+	d := dependenciesPkg.NewMocked(t, ctx)
 	projectState := d.MockedState()
-	useCtx := NewContext(ctxWithVal, templateRef, fs, instanceID, targetBranch, inputsValues, map[string]*template.Input{}, tickets, testapi.MockedComponentsMap(), projectState)
+	useCtx := NewContext(ctxWithVal, templateRef, fs, instanceID, targetBranch, inputsValues, map[string]*template.Input{}, tickets, testapi.MockedComponentsMap(), projectState, d.ProjectBackends())
 
 	// Check Jsonnet functions
 	code := `
@@ -128,16 +129,16 @@ func TestContext(t *testing.T) {
 }
 `
 	jsonOutput, err := jsonnet.Evaluate(code, useCtx.JsonnetContext())
-	assert.NoError(t, err)
-	assert.Equal(t, strings.TrimLeft(expectedJSON, "\n"), jsonOutput)
+	require.NoError(t, err)
+	assert.JSONEq(t, strings.TrimLeft(expectedJSON, "\n"), jsonOutput)
 
 	// Check tickets replacement
 	data := orderedmap.New()
 	json.MustDecodeString(jsonOutput, data)
 	replacements, err := useCtx.Replacements()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	modifiedData, err := replacements.Replace(data)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	modifiedJSON := json.MustEncodeString(modifiedData, true)
 
 	expectedJSON = `
@@ -155,7 +156,7 @@ func TestContext(t *testing.T) {
   }
 }
 `
-	assert.Equal(t, strings.TrimLeft(expectedJSON, "\n"), modifiedJSON)
+	assert.JSONEq(t, strings.TrimLeft(expectedJSON, "\n"), modifiedJSON)
 
 	// Check collected inputs usage
 	assert.Equal(t, &metadata.InputsUsage{
@@ -195,10 +196,10 @@ func TestComponentsFunctions(t *testing.T) {
 		}`),
 	)
 	ctx := context.Background()
-	api, err := keboola.NewAPI(ctx, "https://connection.keboola.com", keboola.WithClient(&c))
-	assert.NoError(t, err)
+	api, err := keboola.NewAuthorizedAPI(ctx, "https://connection.keboola.com", "my-token", keboola.WithClient(&c))
+	require.NoError(t, err)
 
-	d := dependenciesPkg.NewMocked(t)
+	d := dependenciesPkg.NewMocked(t, ctx)
 	projectState := d.MockedState()
 	tickets := keboola.NewTicketProvider(context.Background(), api)
 	components := model.NewComponentsMap(keboola.Components{})
@@ -211,13 +212,14 @@ func TestComponentsFunctions(t *testing.T) {
 
 	// Context factory for template use operation
 	newUseCtx := func() *Context {
-		return NewContext(ctx, templateRef, fs, instanceID, targetBranch, inputsValues, inputs, tickets, components, projectState)
+		return NewContext(ctx, templateRef, fs, instanceID, targetBranch, inputsValues, inputs, tickets, components, projectState, d.ProjectBackends())
 	}
 
 	// Jsonnet template
 	code := `
 {
 "keboola.wr-db-snowflake": ComponentIsAvailable("keboola.wr-db-snowflake"),
+"keboola.wr-db-snowflake-gcs-s3": ComponentIsAvailable("keboola.wr-db-snowflake-gcs-s3"),
 "keboola.wr-snowflake-blob-storage": ComponentIsAvailable("keboola.wr-snowflake-blob-storage"),
 "wr-snowflake": SnowflakeWriterComponentId(),
 }
@@ -226,7 +228,7 @@ func TestComponentsFunctions(t *testing.T) {
 	// Case 1: No component is defined
 	output, err := jsonnet.Evaluate(code, newUseCtx().JsonnetContext())
 	expected := ""
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Equal(t, "jsonnet error: RUNTIME ERROR: no Snowflake Writer component found", err.Error())
 	assert.Equal(t, expected, output)
 
@@ -237,12 +239,13 @@ func TestComponentsFunctions(t *testing.T) {
 	expected = `
 {
   "keboola.wr-db-snowflake": true,
+  "keboola.wr-db-snowflake-gcs-s3": false,
   "keboola.wr-snowflake-blob-storage": false,
   "wr-snowflake": "keboola.wr-db-snowflake"
 }
 `
 	output, err = jsonnet.Evaluate(code, newUseCtx().JsonnetContext())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, strings.TrimSpace(expected), strings.TrimSpace(output))
 
 	// Case 3: Only Azure Snowflake Writer
@@ -252,15 +255,32 @@ func TestComponentsFunctions(t *testing.T) {
 	expected = `
 {
   "keboola.wr-db-snowflake": false,
+  "keboola.wr-db-snowflake-gcs-s3": false,
   "keboola.wr-snowflake-blob-storage": true,
   "wr-snowflake": "keboola.wr-snowflake-blob-storage"
 }
 `
 	output, err = jsonnet.Evaluate(code, newUseCtx().JsonnetContext())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, strings.TrimSpace(expected), strings.TrimSpace(output))
 
-	// Case 4: Both AWS and Azure Snowflake Writer
+	// Case 4: Only Google Snowflake Writer
+	components = model.NewComponentsMap(keboola.Components{
+		{ComponentKey: keboola.ComponentKey{ID: function.SnowflakeWriterIDGCPS3}},
+	})
+	expected = `
+{
+  "keboola.wr-db-snowflake": false,
+  "keboola.wr-db-snowflake-gcs-s3": true,
+  "keboola.wr-snowflake-blob-storage": false,
+  "wr-snowflake": "keboola.wr-db-snowflake-gcs-s3"
+}
+`
+	output, err = jsonnet.Evaluate(code, newUseCtx().JsonnetContext())
+	require.NoError(t, err)
+	assert.Equal(t, strings.TrimSpace(expected), strings.TrimSpace(output))
+
+	// Case 5: Both AWS and Azure Snowflake Writer
 	components = model.NewComponentsMap(keboola.Components{
 		{ComponentKey: keboola.ComponentKey{ID: function.SnowflakeWriterIDAws}},
 		{ComponentKey: keboola.ComponentKey{ID: function.SnowflakeWriterIDAzure}},
@@ -268,11 +288,78 @@ func TestComponentsFunctions(t *testing.T) {
 	expected = `
 {
   "keboola.wr-db-snowflake": true,
+  "keboola.wr-db-snowflake-gcs-s3": false,
   "keboola.wr-snowflake-blob-storage": true,
   "wr-snowflake": "keboola.wr-db-snowflake"
 }
 `
 	output, err = jsonnet.Evaluate(code, newUseCtx().JsonnetContext())
-	assert.NoError(t, err)
+	require.NoError(t, err)
+	assert.Equal(t, strings.TrimSpace(expected), strings.TrimSpace(output))
+}
+
+func TestHasBackendFunction(t *testing.T) {
+	t.Parallel()
+
+	// Mocked ticket provider
+	c, httpTransport := client.NewMockedClient()
+	httpTransport.RegisterResponder(resty.MethodGet, `/v2/storage/?exclude=components`,
+		httpmock.NewStringResponder(200, `{
+			"services": [],
+			"features": []
+		}`),
+	)
+	ctx := context.Background()
+
+	d := dependenciesPkg.NewMocked(t, ctx, dependenciesPkg.WithSnowflakeBackend())
+
+	api, err := keboola.NewAuthorizedAPI(ctx, "https://connection.keboola.com", d.StorageAPIToken().Token, keboola.WithClient(&c))
+	require.NoError(t, err)
+
+	projectState := d.MockedState()
+	tickets := keboola.NewTicketProvider(context.Background(), api)
+	components := model.NewComponentsMap(keboola.Components{})
+	targetBranch := model.BranchKey{ID: 123}
+	inputsValues := template.InputsValues{}
+	inputs := map[string]*template.Input{}
+	templateRef := model.NewTemplateRef(model.TemplateRepository{Name: "my-repository"}, "my-template", "v0.0.1")
+	instanceID := "my-instance"
+	fs := aferofs.NewMemoryFs()
+
+	// Context factory for template use operation
+	newUseCtx := func() *Context {
+		return NewContext(ctx, templateRef, fs, instanceID, targetBranch, inputsValues, inputs, tickets, components, projectState, d.ProjectBackends())
+	}
+
+	// Jsonnet template
+	code := `
+{
+	"snowflake": HasProjectBackend('snowflake'),
+	"bigquery": HasProjectBackend('bigquery')
+}
+`
+	// Case 1: project backend 'snowflake'
+	expected := `
+{
+  "bigquery": false,
+  "snowflake": true
+}
+`
+
+	output, err := jsonnet.Evaluate(code, newUseCtx().JsonnetContext())
+	require.NoError(t, err)
+	assert.Equal(t, strings.TrimSpace(expected), strings.TrimSpace(output))
+
+	// Case 2 backend 'bigquery'
+	d = dependenciesPkg.NewMocked(t, ctx, dependenciesPkg.WithBigQueryBackend())
+
+	expected = `
+{
+  "bigquery": true,
+  "snowflake": false
+}
+`
+	output, err = jsonnet.Evaluate(code, newUseCtx().JsonnetContext())
+	require.NoError(t, err)
 	assert.Equal(t, strings.TrimSpace(expected), strings.TrimSpace(output))
 }

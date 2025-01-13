@@ -3,6 +3,8 @@ package download
 
 import (
 	"context"
+	"encoding/csv"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -22,13 +24,16 @@ import (
 const (
 	StdoutOutput           = "-"
 	GZIPFileExt            = ".gz"
+	CSVFileExt             = ".csv"
 	GetFileSizeParallelism = 100
 )
 
 type dependencies interface {
-	KeboolaProjectAPI() *keboola.API
+	KeboolaProjectAPI() *keboola.AuthorizedAPI
 	Logger() log.Logger
 	Telemetry() telemetry.Telemetry
+	Stdout() io.Writer
+	Stderr() io.Writer
 }
 
 type downloader struct {
@@ -50,7 +55,7 @@ func (d *downloader) Download(ctx context.Context) (returnErr error) {
 	if !d.options.ToStdout() {
 		defer func() {
 			if returnErr == nil {
-				d.Logger().Infof(`File "%d" downloaded to "%s".`, d.options.File.ID, d.options.FormattedOutput())
+				d.Logger().Infof(ctx, `File "%d" downloaded to "%s".`, d.options.File.FileID, d.options.FormattedOutput())
 			}
 		}()
 	}
@@ -75,6 +80,10 @@ func (d *downloader) Download(ctx context.Context) (returnErr error) {
 			returnErr = closeErr
 		}
 	}()
+
+	stderr := d.Stderr()
+	progressbar.OptionSetWriter(stderr)(d.bar)
+	progressbar.OptionOnCompletion(func() { fmt.Fprint(stderr, "\n") })
 
 	// Download
 	if d.options.ToStdout() || !d.options.AllowSliced || !d.options.File.IsSliced {
@@ -107,10 +116,18 @@ func (d *downloader) Download(ctx context.Context) (returnErr error) {
 	return nil
 }
 
+type nopCloser struct {
+	io.Writer
+}
+
+func (n *nopCloser) Close() error {
+	return nil
+}
+
 func (d *downloader) openOutput(slice string) (io.WriteCloser, error) {
 	switch {
 	case d.options.ToStdout():
-		return os.Stdout, nil // stdout should not be closed
+		return &nopCloser{d.Stdout()}, nil // stdout should not be closed
 	case d.options.AllowSliced && d.options.File.IsSliced:
 		return os.OpenFile(filepath.Join(d.options.Output, slice), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) // nolint:forbidigo
 	default:
@@ -140,8 +157,6 @@ func (d *downloader) readSliceTo(ctx context.Context, slice string, writer io.Wr
 			}
 		}()
 		reader = sliceReader
-	} else if slice == "" {
-		return errors.Errorf(`cannot download file: %w`, err)
 	} else {
 		return errors.Errorf(`cannot download file: %w`, err)
 	}
@@ -153,22 +168,37 @@ func (d *downloader) readSliceTo(ctx context.Context, slice string, writer io.Wr
 	}
 
 	// Add decompression reader
-	if strings.HasSuffix(slice, GZIPFileExt) || (slice == "" && strings.HasSuffix(d.options.File.Name, GZIPFileExt)) {
-		if gzipReader, err := pgzip.NewReader(reader); err == nil {
-			defer func() {
-				if closeErr := gzipReader.Close(); returnErr == nil && closeErr != nil {
-					returnErr = closeErr
-				}
-			}()
-			reader = gzipReader
-		} else {
-			return errors.Errorf(`cannot create gzip reader: %w`, err)
+	if !d.options.WithOutDecompress.IsSet() {
+		if strings.HasSuffix(slice, GZIPFileExt) || (slice == "" && strings.HasSuffix(d.options.File.Name, GZIPFileExt)) {
+			if gzipReader, err := pgzip.NewReader(reader); err == nil {
+				defer func() {
+					if closeErr := gzipReader.Close(); returnErr == nil && closeErr != nil {
+						returnErr = closeErr
+					}
+				}()
+				reader = gzipReader
+			} else {
+				return errors.Errorf(`cannot create gzip reader: %w`, err)
+			}
+		}
+	}
+
+	if strings.HasSuffix(d.options.Output, CSVFileExt) && d.options.Header.IsSet() {
+		if err := d.addHeaderToCSV(writer); err != nil {
+			return err
 		}
 	}
 
 	// Copy all
 	_, err := io.Copy(writer, reader)
 	return err
+}
+
+func (d *downloader) addHeaderToCSV(writer io.Writer) error {
+	w := csv.NewWriter(writer)
+	defer w.Flush()
+
+	return w.Write(d.options.Columns)
 }
 
 // getSlices from the file manifest.
@@ -188,7 +218,6 @@ func (d *downloader) totalSize(ctx context.Context) (size int64, err error) {
 	grp, ctx := errgroup.WithContext(ctx)
 	grp.SetLimit(GetFileSizeParallelism)
 	for _, slice := range d.slices {
-		slice := slice
 		grp.Go(func() error {
 			// Check context cancellation
 			if err := ctx.Err(); err != nil {

@@ -18,7 +18,7 @@ type CreateOptions struct {
 }
 
 type dependencies interface {
-	KeboolaProjectAPI() *keboola.API
+	KeboolaProjectAPI() *keboola.AuthorizedAPI
 	Logger() log.Logger
 	Telemetry() telemetry.Telemetry
 }
@@ -42,7 +42,7 @@ func Run(ctx context.Context, o CreateOptions, d dependencies) (err error) {
 		opts = append(opts, keboola.WithSize(o.Size))
 	}
 
-	logger.Info(`Creating a new workspace, please wait.`)
+	logger.Info(ctx, `Creating a new workspace, please wait.`)
 	// Create workspace by API
 	w, err := d.KeboolaProjectAPI().CreateWorkspace(
 		ctx,
@@ -57,10 +57,11 @@ func Run(ctx context.Context, o CreateOptions, d dependencies) (err error) {
 
 	workspace := w.Workspace
 
-	logger.Infof(`Created the new workspace "%s" (%s).`, o.Name, w.Config.ID)
+	logger.Infof(ctx, `Created the new workspace "%s" (%s).`, o.Name, w.Config.ID)
 	switch workspace.Type {
 	case keboola.WorkspaceTypeSnowflake:
 		logger.Infof(
+			ctx,
 			"Credentials:\n  Host: %s\n  User: %s\n  Password: %s\n  Database: %s\n  Schema: %s\n  Warehouse: %s",
 			workspace.Host,
 			workspace.User,
@@ -73,6 +74,7 @@ func Run(ctx context.Context, o CreateOptions, d dependencies) (err error) {
 		fallthrough
 	case keboola.WorkspaceTypeR:
 		logger.Infof(
+			ctx,
 			"Credentials:\n  Host: %s\n  Password: %s",
 			workspace.Host,
 			workspace.Password,

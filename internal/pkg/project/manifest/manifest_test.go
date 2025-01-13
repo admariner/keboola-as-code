@@ -1,14 +1,19 @@
 package manifest
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	"github.com/keboola/go-client/pkg/keboola"
 	"github.com/keboola/go-utils/pkg/wildcards"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"github.com/keboola/keboola-as-code/internal/pkg/env"
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem"
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem/aferofs"
+	"github.com/keboola/keboola-as-code/internal/pkg/log"
 	"github.com/keboola/keboola-as-code/internal/pkg/model"
 	"github.com/keboola/keboola-as-code/internal/pkg/naming"
 )
@@ -56,25 +61,26 @@ func TestManifestLoadNotFound(t *testing.T) {
 	fs := aferofs.NewMemoryFs()
 
 	// Load
-	manifest, err := Load(fs, false)
+	manifest, err := Load(context.Background(), log.NewNopLogger(), fs, env.Empty(), false)
 	assert.Nil(t, manifest)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Equal(t, `manifest ".keboola/manifest.json" not found`, err.Error())
 }
 
 func TestLoadManifestFile(t *testing.T) {
 	t.Parallel()
+	ctx := context.Background()
 	for _, c := range cases() {
 		fs := aferofs.NewMemoryFs()
 
 		// Write file
 		path := Path()
-		assert.NoError(t, fs.WriteFile(filesystem.NewRawFile(path, c.json)))
+		require.NoError(t, fs.WriteFile(ctx, filesystem.NewRawFile(path, c.json)))
 
 		// Load
-		manifest, err := Load(fs, false)
+		manifest, err := Load(ctx, log.NewNopLogger(), fs, env.Empty(), false)
 		assert.NotNil(t, manifest)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		// Assert
 		assert.Equal(t, c.naming, manifest.NamingTemplate(), c.name)
@@ -86,6 +92,7 @@ func TestLoadManifestFile(t *testing.T) {
 
 func TestSaveManifestFile(t *testing.T) {
 	t.Parallel()
+	ctx := context.Background()
 	for _, c := range cases() {
 		fs := aferofs.NewMemoryFs()
 
@@ -94,12 +101,12 @@ func TestSaveManifestFile(t *testing.T) {
 		manifest.SetNamingTemplate(c.naming)
 		manifest.SetAllowedBranches(c.filter.AllowedBranches())
 		manifest.SetIgnoredComponents(c.filter.IgnoredComponents())
-		assert.NoError(t, manifest.records.SetRecords(c.records))
-		assert.NoError(t, manifest.Save(fs))
+		require.NoError(t, manifest.records.SetRecords(c.records))
+		require.NoError(t, manifest.Save(ctx, fs))
 
 		// Load file
-		file, err := fs.ReadFile(filesystem.NewFileDef(Path()))
-		assert.NoError(t, err)
+		file, err := fs.ReadFile(ctx, filesystem.NewFileDef(Path()))
+		require.NoError(t, err)
 		assert.Equal(t, wildcards.EscapeWhitespaces(c.json), wildcards.EscapeWhitespaces(file.Content), c.name)
 	}
 }
@@ -107,22 +114,13 @@ func TestSaveManifestFile(t *testing.T) {
 func TestManifestValidateEmpty(t *testing.T) {
 	t.Parallel()
 	content := &file{}
-	err := content.validate()
-	assert.NotNil(t, err)
+	err := content.validate(context.Background())
+	require.Error(t, err)
 	expected := `manifest is not valid:
 - "version" is a required field
-- "project.id" is a required field
-- "project.apiHost" is a required field
+- "project" is a required field
 - "sortBy" must be one of [id path]
-- "naming.branch" is a required field
-- "naming.config" is a required field
-- "naming.configRow" is a required field
-- "naming.schedulerConfig" is a required field
-- "naming.sharedCodeConfig" is a required field
-- "naming.sharedCodeConfigRow" is a required field
-- "naming.variablesConfig" is a required field
-- "naming.variablesValuesRow" is a required field
-- "naming.dataAppConfig" is a required field
+- "naming" is a required field
 - "allowedBranches" is a required field`
 	assert.Equal(t, expected, err.Error())
 }
@@ -131,14 +129,14 @@ func TestManifestValidateMinimal(t *testing.T) {
 	t.Parallel()
 	content := newFile(12345, "foo.bar")
 	content.setRecords(minimalRecords())
-	assert.NoError(t, content.validate())
+	require.NoError(t, content.validate(context.Background()))
 }
 
 func TestManifestValidateFull(t *testing.T) {
 	t.Parallel()
 	content := newFile(12345, "foo.bar")
 	content.setRecords(fullRecords())
-	assert.NoError(t, content.validate())
+	require.NoError(t, content.validate(context.Background()))
 }
 
 func TestManifestValidateBadVersion(t *testing.T) {
@@ -146,8 +144,8 @@ func TestManifestValidateBadVersion(t *testing.T) {
 	content := newFile(12345, "foo.bar")
 	content.setRecords(minimalRecords())
 	content.Version = 123
-	err := content.validate()
-	assert.Error(t, err)
+	err := content.validate(context.Background())
+	require.Error(t, err)
 	expected := `manifest is not valid: "version" must be 2 or less`
 	assert.Equal(t, expected, err.Error())
 }
@@ -165,8 +163,8 @@ func TestManifestValidateNestedField(t *testing.T) {
 			),
 		},
 	})
-	err := content.validate()
-	assert.Error(t, err)
+	err := content.validate(context.Background())
+	require.Error(t, err)
 	expected := `manifest is not valid: "branches[0].id" is a required field`
 	assert.Equal(t, expected, err.Error())
 }
@@ -174,16 +172,107 @@ func TestManifestValidateNestedField(t *testing.T) {
 func TestManifestCyclicDependency(t *testing.T) {
 	t.Parallel()
 	fs := aferofs.NewMemoryFs()
+	ctx := context.Background()
 
 	// Write file
 	path := filesystem.Join(filesystem.MetadataDir, FileName)
-	assert.NoError(t, fs.WriteFile(filesystem.NewRawFile(path, cyclicDependencyJSON())))
+	require.NoError(t, fs.WriteFile(ctx, filesystem.NewRawFile(path, cyclicDependencyJSON())))
 
 	// Load
-	manifest, err := Load(fs, false)
+	manifest, err := Load(ctx, log.NewNopLogger(), fs, env.Empty(), false)
 	assert.Nil(t, manifest)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Equal(t, "invalid manifest:\n- a cyclic relation was found when resolving path to config \"branch:123/component:keboola.variables/config:111\"", err.Error())
+}
+
+func TestManifest_AllowTargetENV(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	envs := env.Empty()
+
+	// Write file
+	fs := aferofs.NewMemoryFs()
+	path := filesystem.Join(filesystem.MetadataDir, FileName)
+	require.NoError(t, fs.WriteFile(ctx, filesystem.NewRawFile(path, allowTargetEnvJSON())))
+
+	// Load file
+	logger := log.NewDebugLogger()
+	envs.Set(ProjectIDOverrideENV, "111")
+	envs.Set(BranchIDOverrideENV, "222")
+	m, err := Load(ctx, logger, fs, envs, false)
+	require.NoError(t, err)
+	logger.AssertJSONMessages(t, `
+{"level":"info","message":"Overriding the project ID by the environment variable KBC_PROJECT_ID=111"}
+{"level":"info","message":"Overriding the branch ID by the environment variable KBC_BRANCH_ID=222"}
+`)
+
+	// IDs are mapped on load/save
+	assert.Equal(t, keboola.ProjectID(111), m.ProjectID())
+	branch, ok := m.GetRecord(model.BranchKey{ID: 222})
+	assert.True(t, ok)
+	assert.Equal(t, "main", branch.Path())
+
+	// Save file
+	require.NoError(t, m.Save(ctx, fs))
+
+	// The file content is same
+	updatedFile, err := fs.ReadFile(ctx, filesystem.NewFileDef(Path()))
+	require.NoError(t, err)
+	assert.Equal(t, strings.TrimSpace(allowTargetEnvJSON()), strings.TrimSpace(updatedFile.Content))
+}
+
+func allowTargetEnvJSON() string {
+	return `{
+  "version": 2,
+  "project": {
+    "id": 123,
+    "apiHost": "foo.bar"
+  },
+  "allowTargetEnv": true,
+  "sortBy": "id",
+  "naming": {
+    "branch": "{branch_id}-{branch_name}",
+    "config": "{component_type}/{component_id}/{config_id}-{config_name}",
+    "configRow": "rows/{config_row_id}-{config_row_name}",
+    "schedulerConfig": "schedules/{config_id}-{config_name}",
+    "sharedCodeConfig": "_shared/{target_component_id}",
+    "sharedCodeConfigRow": "codes/{config_row_id}-{config_row_name}",
+    "variablesConfig": "variables",
+    "variablesValuesRow": "values/{config_row_id}-{config_row_name}",
+    "dataAppConfig": "app/{component_id}/{config_id}-{config_name}"
+  },
+  "allowedBranches": [
+    "456"
+  ],
+  "ignoredComponents": [],
+  "templates": {
+    "repositories": [
+      {
+        "type": "git",
+        "name": "keboola",
+        "url": "https://github.com/keboola/keboola-as-code-templates.git",
+        "ref": "main"
+      }
+    ]
+  },
+  "branches": [
+    {
+      "id": 456,
+      "path": "main"
+    }
+  ],
+  "configurations": [
+    {
+      "branchId": 456,
+      "componentId": "keboola.ex-db-oracle",
+      "id": "789",
+      "path": "extractor",
+      "rows": []
+    }
+  ]
+}
+`
 }
 
 func minimalJSON() string {
@@ -193,6 +282,7 @@ func minimalJSON() string {
     "id": 12345,
     "apiHost": "foo.bar"
   },
+  "allowTargetEnv": false,
   "sortBy": "id",
   "naming": {
     "branch": "{branch_id}-{branch_name}",
@@ -216,6 +306,12 @@ func minimalJSON() string {
         "name": "keboola",
         "url": "https://github.com/keboola/keboola-as-code-templates.git",
         "ref": "main"
+      },
+      {
+        "type": "git",
+        "name": "keboola-components",
+        "url": "https://github.com/keboola/keboola-as-code-templates-components.git",
+        "ref": "main"
       }
     ]
   },
@@ -236,6 +332,7 @@ func fullJSON() string {
     "id": 12345,
     "apiHost": "foo.bar"
   },
+  "allowTargetEnv": false,
   "sortBy": "id",
   "naming": {
     "branch": "{branch_name}",
@@ -261,6 +358,12 @@ func fullJSON() string {
         "type": "git",
         "name": "keboola",
         "url": "https://github.com/keboola/keboola-as-code-templates.git",
+        "ref": "main"
+      },
+      {
+        "type": "git",
+        "name": "keboola-components",
+        "url": "https://github.com/keboola/keboola-as-code-templates-components.git",
         "ref": "main"
       }
     ]

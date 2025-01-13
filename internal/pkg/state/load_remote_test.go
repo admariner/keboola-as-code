@@ -8,6 +8,7 @@ import (
 	"github.com/keboola/go-utils/pkg/orderedmap"
 	"github.com/spf13/cast"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/env"
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem/aferofs"
@@ -25,9 +26,9 @@ func TestLoadRemoteStateEmpty(t *testing.T) {
 	m := createManifest(t)
 	state, _, remoteErr := loadRemoteState(t, m, "empty.json")
 	assert.NotNil(t, state)
-	assert.Empty(t, remoteErr)
+	require.NoError(t, remoteErr)
 	assert.Len(t, state.Branches(), 1)
-	assert.Len(t, state.Configs(), 0)
+	assert.Empty(t, state.Configs())
 }
 
 func TestLoadRemoteStateComplex(t *testing.T) {
@@ -35,7 +36,7 @@ func TestLoadRemoteStateComplex(t *testing.T) {
 	m := createManifest(t)
 	state, envs, remoteErr := loadRemoteState(t, m, "complex.json")
 	assert.NotNil(t, state)
-	assert.Empty(t, remoteErr)
+	require.NoError(t, remoteErr)
 	assert.Equal(t, complexRemoteExpectedBranches(envs), state.Branches())
 	assert.Equal(t, complexRemoteExpectedConfigs(envs), state.Configs())
 	assert.Equal(t, complexRemoteExpectedConfigsRows(envs), state.ConfigRows())
@@ -47,7 +48,7 @@ func TestLoadRemoteStateAllowedBranches(t *testing.T) {
 	m.SetAllowedBranches(model.AllowedBranches{"f??"}) // foo
 	state, envs, remoteErr := loadRemoteState(t, m, "complex.json")
 	assert.NotNil(t, state)
-	assert.Empty(t, remoteErr)
+	require.NoError(t, remoteErr)
 	// Only Foo branch is loaded, other are "invisible"
 	assert.Equal(t, []*model.BranchState{
 		{
@@ -440,15 +441,15 @@ func createManifest(t *testing.T) *manifest.Manifest {
 func loadRemoteState(t *testing.T, m *manifest.Manifest, projectStateFile string) (*State, *env.Map, error) {
 	t.Helper()
 
-	testProject := testproject.GetTestProjectForTest(t)
+	testProject := testproject.GetTestProjectForTest(t, "")
 	err := testProject.SetState(projectStateFile)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
-	d := dependencies.NewMocked(t, dependencies.WithTestProject(testProject))
+	d := dependencies.NewMocked(t, context.Background(), dependencies.WithTestProject(testProject))
 	state, err := New(context.Background(), project.NewWithManifest(context.Background(), aferofs.NewMemoryFs(), m), d)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	filter := m.Filter()
 	_, localErr, remoteErr := state.Load(context.Background(), LoadOptions{RemoteFilter: filter, LoadRemoteState: true})
-	assert.NoError(t, localErr)
+	require.NoError(t, localErr)
 	return state, testProject.Env(), remoteErr
 }

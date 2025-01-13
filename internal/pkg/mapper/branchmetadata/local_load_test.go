@@ -6,6 +6,7 @@ import (
 
 	"github.com/keboola/go-utils/pkg/orderedmap"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/mapper/branchmetadata"
 	"github.com/keboola/keboola-as-code/internal/pkg/model"
@@ -14,7 +15,7 @@ import (
 
 func TestConfigMetadataMapper_MapAfterLocalLoad(t *testing.T) {
 	t.Parallel()
-	d := dependencies.NewMocked(t)
+	d := dependencies.NewMocked(t, context.Background())
 	logger := d.DebugLogger()
 	mockedState := d.MockedState()
 	mockedState.Mapper().AddMapper(branchmetadata.NewMapper(mockedState, d))
@@ -35,7 +36,7 @@ func TestConfigMetadataMapper_MapAfterLocalLoad(t *testing.T) {
 	}
 
 	recipe := model.NewLocalLoadRecipe(mockedState.FileLoader(), state.Manifest(), state.Local)
-	assert.NoError(t, mockedState.Mapper().MapAfterLocalLoad(context.Background(), recipe))
+	require.NoError(t, mockedState.Mapper().MapAfterLocalLoad(context.Background(), recipe))
 	assert.Empty(t, logger.WarnAndErrorMessages())
 
 	branch := recipe.Object.(*model.Branch)

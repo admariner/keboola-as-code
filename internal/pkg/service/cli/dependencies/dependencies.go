@@ -15,13 +15,18 @@ package dependencies
 import (
 	"context"
 
+	"github.com/keboola/go-client/pkg/keboola"
+
 	"github.com/keboola/keboola-as-code/internal/pkg/dbt"
+	"github.com/keboola/keboola-as-code/internal/pkg/env"
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem"
 	"github.com/keboola/keboola-as-code/internal/pkg/model"
 	projectPkg "github.com/keboola/keboola-as-code/internal/pkg/project"
+	"github.com/keboola/keboola-as-code/internal/pkg/service/cli/cmdconfig"
 	"github.com/keboola/keboola-as-code/internal/pkg/service/cli/dialog"
 	"github.com/keboola/keboola-as-code/internal/pkg/service/cli/event"
-	"github.com/keboola/keboola-as-code/internal/pkg/service/cli/options"
+	"github.com/keboola/keboola-as-code/internal/pkg/service/cli/flag"
+	"github.com/keboola/keboola-as-code/internal/pkg/service/common/configmap"
 	"github.com/keboola/keboola-as-code/internal/pkg/service/common/dependencies"
 	"github.com/keboola/keboola-as-code/internal/pkg/template"
 	"github.com/keboola/keboola-as-code/internal/pkg/template/repository"
@@ -41,12 +46,13 @@ var (
 // BaseScope interface provides basic CLI dependencies.
 type BaseScope interface {
 	dependencies.BaseScope
-	CommandCtx() context.Context
+	Environment() env.Provider
 	Fs() filesystem.Fs
 	FsInfo() FsInfo
+	ConfigBinder() *cmdconfig.Binder
+	GlobalFlags() flag.GlobalFlags
 	Dialogs() *dialog.Dialogs
-	Options() *options.Options
-	EmptyDir() (filesystem.Fs, error)
+	EmptyDir(ctx context.Context) (filesystem.Fs, error)
 	LocalDbtProject(ctx context.Context) (*dbt.Project, bool, error)
 }
 
@@ -56,7 +62,10 @@ type LocalCommandScope interface {
 	BaseScope
 	dependencies.PublicScope
 	Template(ctx context.Context, reference model.TemplateRef) (*template.Template, error)
-	LocalProject(ignoreErrors bool) (*projectPkg.Project, bool, error)
+	TemplateForTests(ctx context.Context, reference model.TemplateRef, projectFilesPath string) (*template.Template, error)
+	ProjectBackends() []string
+	ProjectFeatures() keboola.FeaturesMap
+	LocalProject(ctx context.Context, ignoreErrors bool) (*projectPkg.Project, bool, error)
 	LocalTemplate(ctx context.Context) (*template.Template, bool, error)
 	LocalTemplateRepository(ctx context.Context) (*repository.Repository, bool, error)
 }
@@ -72,14 +81,14 @@ type RemoteCommandScope interface {
 // Provider of CLI dependencies.
 type Provider interface {
 	BaseScope() BaseScope
-	LocalCommandScope(opts ...Option) (LocalCommandScope, error)
-	RemoteCommandScope(opts ...Option) (RemoteCommandScope, error)
+	LocalCommandScope(ctx context.Context, hostByFlags configmap.Value[string], opts ...Option) (LocalCommandScope, error)
+	RemoteCommandScope(ctx context.Context, hostByFlags, tokenByFlags configmap.Value[string], opts ...Option) (RemoteCommandScope, error)
 	// LocalProject method can be used by a CLI command that must be run in the local project directory.
 	// First, the local project is loaded, and then the authentication is performed,
 	// so the error that we are not in a project directory takes precedence over an invalid/missing token.
-	LocalProject(ignoreErrors bool, ops ...Option) (*projectPkg.Project, RemoteCommandScope, error)
+	LocalProject(ctx context.Context, ignoreErrors bool, hostByFlags, tokenByFlags configmap.Value[string], ops ...Option) (*projectPkg.Project, RemoteCommandScope, error)
 	// LocalRepository method can be used by a CLI command that must be run in the local repository directory.
-	LocalRepository(ops ...Option) (*repository.Repository, LocalCommandScope, error)
+	LocalRepository(ctx context.Context, hostByFlags configmap.Value[string], ops ...Option) (*repository.Repository, LocalCommandScope, error)
 	// LocalDbtProject method can be used by a CLI command that must be run in the dbt project directory.
 	LocalDbtProject(ctx context.Context) (*dbt.Project, bool, error)
 }

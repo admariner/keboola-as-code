@@ -1,16 +1,27 @@
 package manifest
 
 import (
+	"context"
+	"reflect"
+	"strconv"
 	"strings"
 
 	"github.com/keboola/go-client/pkg/keboola"
+	"github.com/keboola/go-utils/pkg/deepcopy"
 
+	"github.com/keboola/keboola-as-code/internal/pkg/env"
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem"
+	"github.com/keboola/keboola-as-code/internal/pkg/log"
 	"github.com/keboola/keboola-as-code/internal/pkg/model"
 	"github.com/keboola/keboola-as-code/internal/pkg/naming"
 	"github.com/keboola/keboola-as-code/internal/pkg/state/manifest"
 	"github.com/keboola/keboola-as-code/internal/pkg/template/repository"
 	"github.com/keboola/keboola-as-code/internal/pkg/utils/errors"
+)
+
+const (
+	ProjectIDOverrideENV = "KBC_PROJECT_ID"
+	BranchIDOverrideENV  = "KBC_BRANCH_ID"
 )
 
 type InvalidManifestError struct {
@@ -32,6 +43,10 @@ type records = manifest.Records
 // file contains IDs and paths of the all objects: branches, configs, rows.
 type Manifest struct {
 	*records
+	// allowTargetENV allows usage KBC_PROJECT_ID and KBC_BRANCH_ID envs to override manifest values
+	allowTargetENV bool
+	// mapping between manifest representation and memory representation
+	mapping      []mappingItem
 	project      Project
 	naming       naming.Template
 	filter       model.ObjectsFilter
@@ -43,6 +58,11 @@ type Project struct {
 	APIHost string            `json:"apiHost" validate:"required"`
 }
 
+type mappingItem struct {
+	ManifestValue any
+	MemoryValue   any
+}
+
 func New(projectID keboola.ProjectID, apiHost string) *Manifest {
 	// The "http://" protocol can be used in the API host
 	// Default HTTPS protocol is stripped, to keep backward compatibility.
@@ -52,19 +72,84 @@ func New(projectID keboola.ProjectID, apiHost string) *Manifest {
 		project:      Project{ID: projectID, APIHost: apiHost},
 		naming:       naming.TemplateWithoutIds(),
 		filter:       model.NoFilter(),
-		repositories: []model.TemplateRepository{repository.DefaultRepository()},
+		repositories: []model.TemplateRepository{repository.DefaultRepository(), repository.ComponentsRepository()},
 	}
 }
 
-func Load(fs filesystem.Fs, ignoreErrors bool) (*Manifest, error) {
+func Load(ctx context.Context, logger log.Logger, fs filesystem.Fs, envs env.Provider, ignoreErrors bool) (*Manifest, error) {
 	// Load file content
-	content, err := loadFile(fs)
+	content, err := loadFile(ctx, fs)
 	if err != nil && (!ignoreErrors || content == nil) {
 		return nil, InvalidManifestError{err}
 	}
 
+	// Override ProjectID and BranchID by ENVs, if enabled
+	var mapping []mappingItem
+	if content.AllowTargetENV {
+		projectIDStr := envs.Get(ProjectIDOverrideENV)
+		branchIDStr := envs.Get(BranchIDOverrideENV)
+
+		if branchIDStr != "" && len(content.Branches) != 1 {
+			return nil, errors.Errorf(`env %s=%s can be used if there is one branch in the manifest, found %d branches`, BranchIDOverrideENV, branchIDStr, len(content.Branches))
+		}
+
+		if projectIDStr != "" {
+			if projectIDInt, err := strconv.Atoi(projectIDStr); err == nil {
+				projectID := keboola.ProjectID(projectIDInt)
+				if projectID != content.Project.ID {
+					logger.Infof(ctx, `Overriding the project ID by the environment variable %s=%v`, ProjectIDOverrideENV, projectID)
+					mapping = append(mapping, mappingItem{
+						ManifestValue: content.Project.ID,
+						MemoryValue:   projectID,
+					})
+				}
+			} else {
+				return nil, errors.Errorf(`env %s=%s is not valid project ID`, ProjectIDOverrideENV, projectIDStr)
+			}
+		}
+
+		if branchIDStr != "" {
+			if branchIDInt, err := strconv.Atoi(branchIDStr); err == nil {
+				originalBranchID := content.Branches[0].ID
+				replacedBranchID := keboola.BranchID(branchIDInt)
+				if replacedBranchID != content.Branches[0].ID {
+					logger.Infof(ctx, `Overriding the branch ID by the environment variable %s=%v`, BranchIDOverrideENV, replacedBranchID)
+					// Map branch ID in all objects
+					mapping = append(mapping, mappingItem{
+						ManifestValue: originalBranchID,
+						MemoryValue:   replacedBranchID,
+					})
+					// Map allowed branches filter
+					mapping = append(mapping, mappingItem{
+						ManifestValue: model.AllowedBranch(originalBranchID.String()),
+						MemoryValue:   model.AllowedBranch(replacedBranchID.String()),
+					})
+				}
+				// Replace main branch in the filter, with branch ID, if needed
+				if len(content.AllowedBranches) == 1 && content.AllowedBranches[0] == model.MainBranchDef {
+					content.AllowedBranches[0] = model.AllowedBranch(replacedBranchID.String())
+				}
+			} else {
+				return nil, errors.Errorf(`env %s=%s is not valid branch ID`, BranchIDOverrideENV, branchIDStr)
+			}
+		}
+	}
+
+	// Map manifest IDs to memory IDs
+	if len(mapping) > 0 {
+		content = deepcopy.CopyTranslate(content, func(original, clone reflect.Value, path deepcopy.Path) {
+			for _, pair := range mapping {
+				if original.Interface() == pair.ManifestValue {
+					clone.Set(reflect.ValueOf(pair.MemoryValue))
+				}
+			}
+		}).(*file)
+	}
+
 	// Create manifest
 	m := New(content.Project.ID, content.Project.APIHost)
+	m.allowTargetENV = content.AllowTargetENV
+	m.mapping = mapping
 
 	// Set configuration
 	m.SetSortBy(content.SortBy)
@@ -82,9 +167,10 @@ func Load(fs filesystem.Fs, ignoreErrors bool) (*Manifest, error) {
 	return m, nil
 }
 
-func (m *Manifest) Save(fs filesystem.Fs) error {
+func (m *Manifest) Save(ctx context.Context, fs filesystem.Fs) error {
 	// Create file content
 	content := newFile(m.ProjectID(), m.APIHost())
+	content.AllowTargetENV = m.allowTargetENV
 	content.SortBy = m.SortBy()
 	content.Naming = m.naming
 	content.AllowedBranches = m.filter.AllowedBranches()
@@ -92,8 +178,24 @@ func (m *Manifest) Save(fs filesystem.Fs) error {
 	content.Templates.Repositories = m.repositories
 	content.setRecords(m.records.All())
 
+	// Map memory IDs to manifest IDs
+	if len(m.mapping) > 0 {
+		content = deepcopy.CopyTranslate(content, func(original, clone reflect.Value, path deepcopy.Path) {
+			for _, pair := range m.mapping {
+				if original.Interface() == pair.MemoryValue {
+					clone.Set(reflect.ValueOf(pair.ManifestValue))
+				}
+			}
+		}).(*file)
+	}
+
+	// Replace main branch in the filter, with branch ID, if needed
+	if content.AllowTargetENV && len(content.AllowedBranches) == 1 && content.AllowedBranches[0] == model.MainBranchDef && len(content.Branches) == 1 {
+		content.AllowedBranches[0] = model.AllowedBranch(content.Branches[0].ID.String())
+	}
+
 	// Save file
-	if err := saveFile(fs, content); err != nil {
+	if err := saveFile(ctx, fs, content); err != nil {
 		return err
 	}
 
@@ -123,6 +225,14 @@ func (m *Manifest) NamingTemplate() naming.Template {
 
 func (m *Manifest) SetNamingTemplate(v naming.Template) {
 	m.naming = v
+}
+
+func (m *Manifest) AllowTargetENV() bool {
+	return m.allowTargetENV
+}
+
+func (m *Manifest) SetAllowTargetENV(v bool) {
+	m.allowTargetENV = v
 }
 
 func (m *Manifest) AllowedBranches() model.AllowedBranches {

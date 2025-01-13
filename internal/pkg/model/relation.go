@@ -224,7 +224,7 @@ func (v *Relations) UnmarshalJSON(data []byte) error {
 	}
 
 	for _, item := range raw {
-		var obj map[string]interface{}
+		var obj map[string]any
 		if err := json.Unmarshal(item, &obj); err != nil {
 			return err
 		}
@@ -262,7 +262,7 @@ func (v *Relations) UnmarshalJSON(data []byte) error {
 }
 
 func (v Relations) MarshalJSON() ([]byte, error) {
-	var out []*orderedmap.OrderedMap
+	out := make([]*orderedmap.OrderedMap, 0, len(v))
 	for _, relation := range v {
 		// Validate, only manifest side should be serialized to JSON
 		if !relation.IsDefinedInManifest() {

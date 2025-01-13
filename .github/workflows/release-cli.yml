@@ -6,7 +6,6 @@ on:
       - "v**"
 
 env:
-  GO_VERSION: 1.19.3
   TAG: ${{ github.ref_name }}
 
   # DockerHub login
@@ -39,7 +38,7 @@ jobs:
       - name: Set version
         id: version
         run: |
-          VERSION=$(echo "${{ github.ref_name }}" | sed -n -E 's:^v?([0-9]+\.[0-9]+\.[0-9]+)$:\1:p')
+          VERSION=$(echo "${{ github.ref_name }}" | sed -n -E 's:^v?([0-9]+\.[0-9]+\.[0-9]+(-[a-z]+\.[0-9]+)?)$:\1:p')
           if [ -z "$VERSION" ]; then
             echo "expected a semantic tag, found \"$TAG\""
             exit 1
@@ -56,6 +55,9 @@ jobs:
     name: "Unit Tests"
     secrets: inherit
     uses: ./.github/workflows/test-unit.yml
+    with:
+      without-cache: true
+      package-exception-regex: "./internal/pkg/service/stream|./internal/pkg/service/templates|./internal/pkg/service/appsproxy"
 
   test-e2e-cli:
     name: "E2E: CLI"
@@ -65,6 +67,7 @@ jobs:
     uses: ./.github/workflows/test-e2e-cli.yml
     with:
       version: ${{ needs.version.outputs.VERSION }}
+      without-cache: true
 
   provisioning-cli-s3:
     name: "Provisioning: CLI S3"
@@ -86,27 +89,22 @@ jobs:
       cancel-in-progress: false
     env:
       VERSION: ${{ needs.version.outputs.VERSION }}
-    runs-on: macos-latest
     permissions:
       id-token: write
       contents: write
+    runs-on: macos-latest
     steps:
       - name: Check out the repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      - name: Install Go
-        uses: actions/setup-go@v3
+      - name: Setup Go, tools and caching
+        uses: ./.github/actions/go-setup
         with:
-          go-version: ${{ env.GO_VERSION }}
-
-      - name: Install tools
-        run: |
-          . ./scripts/tools.sh
-          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
-        shell: bash
+          build-type: cli-release
+          cache-s3-bucket: ${{ vars.CACHE_S3_BUCKET }}
 
       - name: Import Code-Signing Certificates
-        uses: Apple-Actions/import-codesign-certs@v1
+        uses: Apple-Actions/import-codesign-certs@v3
         with:
           # The certificates in a PKCS12 file encoded as a base64 string
           p12-file-base64: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_P12_BASE64 }}
@@ -127,31 +125,69 @@ jobs:
           echo "$APK_KEY_PRIVATE" > /tmp/keys/apk.key
           chmod 0600 /tmp/keys/apk.key
 
-      - name: Install Gon
-        run: |
-          brew tap mitchellh/gon
-          brew install mitchellh/gon/gon
+      - name: Release CLI
+        uses: ./.github/actions/release
+        with:
+          tag: ${{ env.TAG }}
+          version: ${{ env.VERSION }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          apple_account_password: ${{ secrets.APPLE_ACCOUNT_PASSWORD }}
+
+  push-to-s3-and-release:
+    needs:
+      - version
+      - release
+    env:
+      VERSION: ${{ needs.version.outputs.VERSION }}
+    permissions:
+      id-token: write
+      contents: write
+    runs-on: macos-latest
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Download targets
+        uses: actions/download-artifact@v4
+        with:
+          name: release-targets
 
       - name: Configure AWS Credentials to CLI Assets Account
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.AWS_ROLE_TO_ASSUME }}
-          aws-region: ${{ env.AWS_ROLE_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
 
-      - name: Release
-        run: make release
+      - name: Upload artifacts to KAC Assets S3
+        shell: bash
+        run: |
+          ls -al
+          ./build/package/s3/publish.sh "keboola-cli_${{ env.VERSION }}_checksums.txt" "keboola-cli_${{ env.VERSION }}_checksums.txt" "keboola-cli" "${{ env.VERSION }}" "" ""
+          ./build/package/s3/publish.sh "keboola-cli_${{ env.VERSION }}_linux_armv6.zip" "keboola-cli_${{ env.VERSION }}_linux_armv6.zip" "keboola-cli" "${{ env.VERSION }}" "linux" "armv6"
+          ./build/package/s3/publish.sh "keboola-cli_${{ env.VERSION }}_linux_arm64.zip" "keboola-cli_${{ env.VERSION }}_linux_arm64.zip" "keboola-cli" "${{ env.VERSION }}" "linux" "arm64"
+          ./build/package/s3/publish.sh "keboola-cli_${{ env.VERSION }}_linux_amd64.zip" "keboola-cli_${{ env.VERSION }}_linux_amd64.zip" "keboola-cli" "${{ env.VERSION }}" "linux" "amd64"
+          ./build/package/s3/publish.sh "keboola-cli_${{ env.VERSION }}_windows_armv6.zip" "keboola-cli_${{ env.VERSION }}_windows_armv6.zip" "keboola-cli" "${{ env.VERSION }}" "windows" "armv6"
+          ./build/package/s3/publish.sh "keboola-cli_${{ env.VERSION }}_windows_arm64.zip" "keboola-cli_${{ env.VERSION }}_windows_arm64.zip" "keboola-cli" "${{ env.VERSION }}" "windows" "arm64"
+          ./build/package/s3/publish.sh "keboola-cli_${{ env.VERSION }}_windows_amd64.zip" "keboola-cli_${{ env.VERSION }}_windows_amd64.zip" "keboola-cli" "${{ env.VERSION }}" "windows" "amd64"
+          ./build/package/s3/publish.sh "keboola-cli_darwin_amd64_v1/kbc.zip" "keboola-cli_${{ env.VERSION }}_darwin_amd64.zip" "keboola-cli" "${{ env.VERSION }}" "darwin" "amd64"
+          ./build/package/s3/publish.sh "keboola-cli_darwin_arm64/kbc.zip" "keboola-cli_${{ env.VERSION }}_darwin_arm64.zip" "keboola-cli" "${{ env.VERSION }}" "darwin" "arm64"
+          # Publish packages
+          ./build/package/s3/publish.sh "keboola-cli_${{ env.VERSION }}_linux_armv6.apk" "keboola-cli_${{ env.VERSION }}_linux_armv6.apk" "keboola-cli" "${{ env.VERSION }}" "linux" "armv6"
+          ./build/package/s3/publish.sh "keboola-cli_${{ env.VERSION }}_linux_arm64.apk" "keboola-cli_${{ env.VERSION }}_linux_arm64.apk" "keboola-cli" "${{ env.VERSION }}" "linux" "arm64"
+          ./build/package/s3/publish.sh "keboola-cli_${{ env.VERSION }}_linux_amd64.apk" "keboola-cli_${{ env.VERSION }}_linux_amd64.apk" "keboola-cli" "${{ env.VERSION }}" "linux" "amd64"
+          ./build/package/s3/publish.sh "keboola-cli_${{ env.VERSION }}_linux_armv6.deb" "keboola-cli_${{ env.VERSION }}_linux_armv6.deb" "keboola-cli" "${{ env.VERSION }}" "linux" "armv6"
+          ./build/package/s3/publish.sh "keboola-cli_${{ env.VERSION }}_linux_arm64.deb" "keboola-cli_${{ env.VERSION }}_linux_arm64.deb" "keboola-cli" "${{ env.VERSION }}" "linux" "arm64"
+          ./build/package/s3/publish.sh "keboola-cli_${{ env.VERSION }}_linux_amd64.deb" "keboola-cli_${{ env.VERSION }}_linux_amd64.deb" "keboola-cli" "${{ env.VERSION }}" "linux" "amd64"
+          ./build/package/s3/publish.sh "keboola-cli_${{ env.VERSION }}_linux_armv6.rpm" "keboola-cli_${{ env.VERSION }}_linux_armv6.rpm" "keboola-cli" "${{ env.VERSION }}" "linux" "armv6"
+          ./build/package/s3/publish.sh "keboola-cli_${{ env.VERSION }}_linux_arm64.rpm" "keboola-cli_${{ env.VERSION }}_linux_arm64.rpm" "keboola-cli" "${{ env.VERSION }}" "linux" "arm64"
+          ./build/package/s3/publish.sh "keboola-cli_${{ env.VERSION }}_linux_amd64.rpm" "keboola-cli_${{ env.VERSION }}_linux_amd64.rpm" "keboola-cli" "${{ env.VERSION }}" "linux" "amd64"
+          ls -al
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CLI_DIST_BASE_URL: ${{ env.BASE_URL }}
-          CLI_DIST_AWS_REGION: ${{ env.AWS_REGION }}
-          CLI_DIST_AWS_BUCKET_NAME: ${{ env.AWS_BUCKET_NAME }}
-          CLI_DIST_AWS_ACCESS_KEY_ID: ${{ env.AWS_ACCESS_KEY_ID }}
-          CLI_DIST_AWS_SECRET_ACCESS_KEY: ${{ env.AWS_SECRET_ACCESS_KEY }}
-          CLI_DIST_AWS_SESSION_TOKEN: ${{ env.AWS_SESSION_TOKEN }}
-          DEB_KEY_PRIVATE_PATH: /tmp/keys/deb.key
-          RPM_KEY_PRIVATE_PATH: /tmp/keys/rpm.key
-          APK_KEY_PRIVATE_PATH: /tmp/keys/apk.key
-          APPLE_ACCOUNT_PASSWORD: ${{ secrets.APPLE_ACCOUNT_PASSWORD }}
+          AWS_REGION: ${{ env.AWS_REGION }}
+          AWS_BUCKET_NAME: ${{ env.AWS_BUCKET_NAME }}
+          AWS_ACCESS_KEY_ID: ${{ env.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ env.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ env.AWS_SESSION_TOKEN }}
 
       - name: Upload artifact to release
         uses: svenstaro/upload-release-action@v2
@@ -161,31 +197,37 @@ jobs:
           tag: ${{ env.TAG }}
           overwrite: true
           file_glob: true
+          prerelease: true
 
-      - name: Create Homebrew formulae
+  test-expected-files:
+    needs:
+      - version
+      - release
+      - push-to-s3-and-release
+    env:
+      VERSION: ${{ needs.version.outputs.VERSION }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check expected files exist
         run: |
-          mkdir target/homebrew
-          export DARWIN_ARM_TARGET_SHA256=$(openssl dgst -sha256  target/gh-release/*darwin_arm64.zip | cut -f 2 -d ' ' )
-          export DARWIN_AMD_TARGET_SHA256=$(openssl dgst -sha256  target/gh-release/*darwin_amd64.zip | cut -f 2 -d ' ' )
-          export LINUX_ARM_TARGET_SHA256=$(openssl dgst -sha256   target/gh-release/*linux_armv6.zip  | cut -f 2 -d ' ' )
-          export LINUX_ARM64_TARGET_SHA256=$(openssl dgst -sha256 target/gh-release/*linux_arm64.zip  | cut -f 2 -d ' ' )
-          export LINUX_AMD_TARGET_SHA256=$(openssl dgst -sha256   target/gh-release/*linux_amd64.zip  | cut -f 2 -d ' ' )
-          envsubst < build/package/homebrew/homebrew.template.rb > target/homebrew/keboola-cli.rb
-          cat target/homebrew/keboola-cli.rb
-
-      - name: Upload Homebrew formulae
-        uses: actions/upload-artifact@v3
-        with:
-          name: homebrew-formulae
-          path: target/homebrew/keboola-cli.rb
-          retention-days: 1
-
-      - name: Upload Scoop manifest
-        uses: actions/upload-artifact@v3
-        with:
-          name: scoop-manifest
-          path: target/keboola-cli.json
-          retention-days: 1
+          curl --output /dev/null --silent --head --fail "https://github.com/${{ github.repository }}/releases/download/v${{ env.VERSION }}/keboola-cli_${{ env.VERSION }}_checksums.txt"
+          curl --output /dev/null --silent --head --fail "https://github.com/${{ github.repository }}/releases/download/v${{ env.VERSION }}/keboola-cli_${{ env.VERSION }}_darwin_amd64.zip"
+          curl --output /dev/null --silent --head --fail "https://github.com/${{ github.repository }}/releases/download/v${{ env.VERSION }}/keboola-cli_${{ env.VERSION }}_darwin_arm64.zip"
+          curl --output /dev/null --silent --head --fail "https://github.com/${{ github.repository }}/releases/download/v${{ env.VERSION }}/keboola-cli_${{ env.VERSION }}_linux_amd64.apk"
+          curl --output /dev/null --silent --head --fail "https://github.com/${{ github.repository }}/releases/download/v${{ env.VERSION }}/keboola-cli_${{ env.VERSION }}_linux_amd64.deb"
+          curl --output /dev/null --silent --head --fail "https://github.com/${{ github.repository }}/releases/download/v${{ env.VERSION }}/keboola-cli_${{ env.VERSION }}_linux_amd64.rpm"
+          curl --output /dev/null --silent --head --fail "https://github.com/${{ github.repository }}/releases/download/v${{ env.VERSION }}/keboola-cli_${{ env.VERSION }}_linux_amd64.zip"
+          curl --output /dev/null --silent --head --fail "https://github.com/${{ github.repository }}/releases/download/v${{ env.VERSION }}/keboola-cli_${{ env.VERSION }}_linux_arm64.apk"
+          curl --output /dev/null --silent --head --fail "https://github.com/${{ github.repository }}/releases/download/v${{ env.VERSION }}/keboola-cli_${{ env.VERSION }}_linux_arm64.deb"
+          curl --output /dev/null --silent --head --fail "https://github.com/${{ github.repository }}/releases/download/v${{ env.VERSION }}/keboola-cli_${{ env.VERSION }}_linux_arm64.rpm"
+          curl --output /dev/null --silent --head --fail "https://github.com/${{ github.repository }}/releases/download/v${{ env.VERSION }}/keboola-cli_${{ env.VERSION }}_linux_arm64.zip"
+          curl --output /dev/null --silent --head --fail "https://github.com/${{ github.repository }}/releases/download/v${{ env.VERSION }}/keboola-cli_${{ env.VERSION }}_linux_armv6.apk"
+          curl --output /dev/null --silent --head --fail "https://github.com/${{ github.repository }}/releases/download/v${{ env.VERSION }}/keboola-cli_${{ env.VERSION }}_linux_armv6.deb"
+          curl --output /dev/null --silent --head --fail "https://github.com/${{ github.repository }}/releases/download/v${{ env.VERSION }}/keboola-cli_${{ env.VERSION }}_linux_armv6.rpm"
+          curl --output /dev/null --silent --head --fail "https://github.com/${{ github.repository }}/releases/download/v${{ env.VERSION }}/keboola-cli_${{ env.VERSION }}_linux_armv6.zip"
+          curl --output /dev/null --silent --head --fail "https://github.com/${{ github.repository }}/releases/download/v${{ env.VERSION }}/keboola-cli_${{ env.VERSION }}_windows_amd64.zip"
+          curl --output /dev/null --silent --head --fail "https://github.com/${{ github.repository }}/releases/download/v${{ env.VERSION }}/keboola-cli_${{ env.VERSION }}_windows_arm64.zip"
+          curl --output /dev/null --silent --head --fail "https://github.com/${{ github.repository }}/releases/download/v${{ env.VERSION }}/keboola-cli_${{ env.VERSION }}_windows_armv6.zip"
 
   update-repositories-homebrew:
     needs:
@@ -199,10 +241,10 @@ jobs:
       contents: read
     steps:
       - name: Check out the repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Download Homebrew formulae
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: homebrew-formulae
           path: target/homebrew
@@ -233,13 +275,13 @@ jobs:
       contents: read
     steps:
       - name: Check out the repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
 
       - name: Docker login
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3
         with:
           username: ${{ env.DOCKERHUB_USER }}
           password: ${{ env.DOCKERHUB_TOKEN }}
@@ -289,7 +331,7 @@ jobs:
           APK_KEY_PRIVATE: ${{ secrets.APK_KEY_PRIVATE }}
 
       - name: Download Scoop manifest
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: scoop-manifest
           path: target/scoop
@@ -308,23 +350,30 @@ jobs:
     needs:
       - version
       - release
+      - push-to-s3-and-release
     env:
       VERSION: ${{ needs.version.outputs.VERSION }}
     outputs:
       msi_checksum: ${{ steps.checksum.outputs.msi_checksum }}
       msi_file: ${{ steps.build_msi.outputs.msi_file }}
-    runs-on: windows-2019
+    runs-on: windows-2022
     permissions:
       id-token: write
       contents: read
     steps:
       - name: Check out the repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Install GitHub "hub" CLI
         uses: geertvdc/setup-hub@master
         env:
           ACTIONS_ALLOW_UNSECURE_COMMANDS: 'true' # allow add-path
+
+      - name: Install Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu' # See 'Supported distributions' for available options
+          java-version: '21'
 
       - name: Download zipped exe
         id: download_zip
@@ -338,7 +387,7 @@ jobs:
 
       - name: Prepare PATH
         id: setup_msbuild
-        uses: microsoft/setup-msbuild@v1.0.3
+        uses: microsoft/setup-msbuild@v2.0.0
 
       - name: Obtain signing cert
         id: obtain_cert
@@ -348,11 +397,38 @@ jobs:
         run: |
           base64 -d <<<"$CERT_CONTENTS" > ./cert.pfx
 
-      - name: Sign EXE
-        env:
-          CERT_PASS: ${{ secrets.WINDOWS_CERT_PASS }}
+      - name: Fetch token
+        shell: bash
         run: |
-          .\build\package\windows\signtool sign /d "Keboola CLI" /f .\cert.pfx /p $env:CERT_PASS /fd sha256 /tr http://timestamp.digicert.com /v kbc.exe
+          RESPONSE=$(curl -s -X POST "https://login.microsoftonline.com/${{ secrets.WINDOWS_SIGNING_TENANT_ID }}/oauth2/v2.0/token" \
+          -H "Content-Type: application/x-www-form-urlencoded" \
+          -H "Accept: application/json" \
+          -d "grant_type=client_credentials&client_id=${{ secrets.WINDOWS_SIGNING_CLIENT_ID }}&client_secret=${{ secrets.WINDOWS_SIGNING_CLIENT_SECRET }}&scope=https://vault.azure.net/.default")
+          
+          ACCESS_TOKEN=$(echo "$RESPONSE" | jq -r '.access_token')
+          
+          if [[ -z "$ACCESS_TOKEN" ]]; then
+          echo "Failed to fetch access token"
+          echo "Response: $RESPONSE"
+          exit 1
+          fi
+          
+          echo "WINDOWS_SIGNING_ACCESS_TOKEN=${ACCESS_TOKEN}" >> $GITHUB_ENV
+
+      - name: Download jsign
+        shell: bash
+        run: |
+          curl -L -o jsign-6.0.jar https://github.com/ebourg/jsign/releases/download/6.0/jsign-6.0.jar
+
+      - name: Sign EXE
+        shell: bash
+        run: |
+          java -jar jsign-6.0.jar --storetype AZUREKEYVAULT \
+            --keystore kbc-cli-code-signing \
+            --storepass ${{ env.WINDOWS_SIGNING_ACCESS_TOKEN }} \
+            --tsaurl http://timestamp.digicert.com \
+            --replace \
+            "kbc.exe"
 
       - name: Build MSI
         id: build_msi
@@ -366,13 +442,27 @@ jobs:
           "${MSBUILD_PATH}\MSBuild.exe" ./build/package/windows/msi.wixproj -p:SourceDir="$PWD" -p:OutputPath="./msi" -p:OutputName="$filename" -p:ProductVersion="${VERSION}"
           echo "msi_file=${filename}.msi" >> $GITHUB_OUTPUT
 
+      # Error Handling: "ERROR StatusLogger Log4j2 could not find a logging implementation.
+      # Please add log4j-core to the classpath. Using SimpleLogger to log to the console..."
+      #
+      # This error indicates that the jsign tool (which uses Log4j2 for logging) is unable to find
+      # the core logging implementation (log4j-core) in its classpath. As a result, Log4j2 defaults
+      # to SimpleLogger, which logs to the console.
+      #
+      # To resolve this issue, ensure that the jsign-6.0.jar file includes the log4j-core library
+      # or that the log4j-core dependency is correctly added to the classpath.
       - name: Sign MSI
+        shell: bash
         env:
-          CERT_PASS: ${{ secrets.WINDOWS_CERT_PASS }}
           MSI_FILE: ${{ steps.build_msi.outputs.msi_file }}
         run: |
-          $msi=".\build\package\windows\msi\$env:MSI_FILE"
-          .\build\package\windows\signtool sign /d "Keboola CLI" /f .\cert.pfx /p $env:CERT_PASS /fd sha256 /tr http://timestamp.digicert.com /v $msi
+          msi="./build/package/windows/msi/${{ env.MSI_FILE }}"
+          java -jar jsign-6.0.jar --storetype AZUREKEYVAULT \
+            --keystore kbc-cli-code-signing \
+            --storepass ${{ env.WINDOWS_SIGNING_ACCESS_TOKEN }} \
+            --tsaurl http://timestamp.digicert.com \
+            --replace \
+            $msi
 
       - name: Configure AWS Credentials to CLI Assets Account
         uses: aws-actions/configure-aws-credentials@v4
@@ -401,7 +491,7 @@ jobs:
       - name: Push Chocolatey
         env:
           CHOCOLATEY_KEY: ${{ secrets.CHOCOLATEY_KEY }}
-          MSI_CHECKSUM: ${{ steps.checksum.msi_checksum }}
+          MSI_CHECKSUM: ${{ steps.checksum.outputs.msi_checksum }}
           MSI_FILE: ${{ steps.build_msi.outputs.msi_file }}
         run: |
           New-Item -ItemType "directory" -Path ".\build\package\chocolatey\push"
@@ -504,7 +594,6 @@ jobs:
     env:
       VERSION: ${{ needs.version.outputs.VERSION }}
     steps:
-
       - name: Install on Linux by Homebrew
         if: always()
         run: |
@@ -517,6 +606,7 @@ jobs:
   test-install-homebrew-mac-os:
     needs:
       - update-repositories-homebrew
+      - push-to-s3-and-release
     env:
       VERSION: ${{ needs.version.outputs.VERSION }}
     runs-on: macos-latest
@@ -534,7 +624,7 @@ jobs:
       - update-repositories-windows
     env:
       VERSION: ${{ needs.version.outputs.VERSION }}
-    runs-on: windows-2019
+    runs-on: windows-2022
     steps:
       - name: Download MSI
         shell: bash

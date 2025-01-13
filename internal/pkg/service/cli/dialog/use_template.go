@@ -13,81 +13,12 @@ import (
 	"github.com/umisama/go-regexpcache"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/encoding/json"
-	"github.com/keboola/keboola-as-code/internal/pkg/project"
 	"github.com/keboola/keboola-as-code/internal/pkg/service/cli/prompt"
+	"github.com/keboola/keboola-as-code/internal/pkg/service/common/configmap"
 	"github.com/keboola/keboola-as-code/internal/pkg/template"
 	"github.com/keboola/keboola-as-code/internal/pkg/template/input"
 	"github.com/keboola/keboola-as-code/internal/pkg/utils/errors"
-	useTemplate "github.com/keboola/keboola-as-code/pkg/lib/operation/project/local/template/use"
 )
-
-const (
-	nameFlag       = "instance-name"
-	inputsFileFlag = "inputs-file"
-)
-
-type useTmplDialog struct {
-	*Dialogs
-	projectState *project.State
-	inputs       template.StepsGroups
-	out          useTemplate.Options
-}
-
-// AskUseTemplateOptions - dialog for using the template in the project.
-func (p *Dialogs) AskUseTemplateOptions(projectState *project.State, inputs template.StepsGroups) (useTemplate.Options, error) {
-	dialog := &useTmplDialog{
-		Dialogs:      p,
-		projectState: projectState,
-		inputs:       inputs,
-	}
-	return dialog.ask()
-}
-
-func (d *useTmplDialog) ask() (useTemplate.Options, error) {
-	// Target branch
-	targetBranch, err := d.SelectBranch(d.projectState.LocalObjects().Branches(), `Select the target branch`)
-	if err != nil {
-		return d.out, err
-	}
-	d.out.TargetBranch = targetBranch.BranchKey
-
-	// Instance name
-	if v, err := d.askInstanceName(); err != nil {
-		return d.out, err
-	} else {
-		d.out.InstanceName = v
-	}
-
-	// User inputs
-	if v, _, err := d.askUseTemplateInputs(d.inputs.ToExtended(), false); err != nil {
-		return d.out, err
-	} else {
-		d.out.Inputs = v
-	}
-
-	return d.out, nil
-}
-
-func (d *useTmplDialog) askInstanceName() (string, error) {
-	// Is flag set?
-	if d.options.IsSet(nameFlag) {
-		v := d.options.GetString(nameFlag)
-		if len(v) > 0 {
-			return v, nil
-		}
-	}
-
-	// Ask for instance name
-	v, _ := d.Prompt.Ask(&prompt.Question{
-		Label:       "Instance Name",
-		Description: "Please enter an instance name to differentiate between multiple uses of the template.",
-		Validator:   prompt.ValueRequired,
-	})
-	if len(v) == 0 {
-		return "", errors.New(`please specify the instance name`)
-	}
-	return v, nil
-}
 
 type useTmplInputsDialog struct {
 	*Dialogs
@@ -100,23 +31,23 @@ type useTmplInputsDialog struct {
 	inputsValues  map[string]any  // for input.Available
 }
 
-// askUseTemplateInputs - dialog to enter template inputs.
-func (p *Dialogs) askUseTemplateInputs(groups input.StepsGroupsExt, isForTest bool) (template.InputsValues, []string, error) {
+// AskUseTemplateInputs - dialog to enter template inputs.
+func (p *Dialogs) AskUseTemplateInputs(ctx context.Context, groups input.StepsGroupsExt, isForTest bool, inputsFileFlag configmap.Value[string]) (template.InputsValues, []string, error) {
 	dialog := &useTmplInputsDialog{
 		Dialogs:      p,
 		groups:       groups,
 		inputs:       groups.InputsMap(),
-		context:      context.Background(),
+		context:      context.WithoutCancel(ctx),
 		inputsValues: make(map[string]any),
 	}
-	return dialog.ask(isForTest)
+	return dialog.ask(ctx, isForTest, inputsFileFlag)
 }
 
-func (d *useTmplInputsDialog) ask(isForTest bool) (template.InputsValues, []string, error) {
+func (d *useTmplInputsDialog) ask(ctx context.Context, isForTest bool, inputsFile configmap.Value[string]) (template.InputsValues, []string, error) {
 	// Load inputs file
-	if d.options.IsSet(inputsFileFlag) {
+	if inputsFile.IsSet() {
 		d.useInputsFile = true
-		path := d.options.GetString(inputsFileFlag)
+		path := inputsFile.Value
 		content, err := os.ReadFile(path) // nolint:forbidigo // file may be outside the project, so the OS package is used
 		if err != nil {
 			return d.out, nil, errors.Errorf(`cannot read inputs file "%s": %w`, path, err)
@@ -147,7 +78,7 @@ func (d *useTmplInputsDialog) ask(isForTest bool) (template.InputsValues, []stri
 
 		// Use empty value if we don't ask for the input
 		if !available {
-			return d.addInputValue(inputDef.Empty(), inputDef, false)
+			return d.addInputValue(ctx, inputDef.Empty(), inputDef, false)
 		}
 
 		// Print info about step
@@ -160,11 +91,11 @@ func (d *useTmplInputsDialog) ask(isForTest bool) (template.InputsValues, []stri
 		// Use value from the inputs file, if it is present
 		if d.useInputsFile {
 			if v, found := d.inputsFile[inputDef.ID]; found {
-				if err := d.addInputValue(v, inputDef, true); err != nil {
+				if err := d.addInputValue(ctx, v, inputDef, true); err != nil {
 					return errors.NewNestedError(err, errors.New("please fix the value in the inputs JSON file"))
 				}
 			} else {
-				if err := d.addInputValue(d.defaultOrEmptyValueFor(inputDef), inputDef, true); err != nil {
+				if err := d.addInputValue(ctx, d.defaultOrEmptyValueFor(inputDef), inputDef, true); err != nil {
 					return errors.NewNestedError(err, errors.New("please define value in the inputs JSON file"))
 				}
 			}
@@ -172,7 +103,7 @@ func (d *useTmplInputsDialog) ask(isForTest bool) (template.InputsValues, []stri
 		}
 
 		// Ask for the input
-		warning, err := d.askInput(inputDef, isForTest)
+		warning, err := d.askInput(ctx, inputDef, isForTest)
 		if err != nil {
 			return err
 		}
@@ -295,7 +226,7 @@ func (d *useTmplInputsDialog) announceStep(step *input.StepExt) error {
 	return nil
 }
 
-func (d *useTmplInputsDialog) askInput(inputDef *input.Input, isForTest bool) (string, error) {
+func (d *useTmplInputsDialog) askInput(ctx context.Context, inputDef *input.Input, isForTest bool) (string, error) {
 	// Ask for input
 
 	if inputDef.Kind == input.KindHidden && isForTest {
@@ -309,7 +240,7 @@ func (d *useTmplInputsDialog) askInput(inputDef *input.Input, isForTest bool) (s
 					return err
 				}
 
-				strValue := cast.ToString(value)
+				strValue := strings.ToUpper(cast.ToString(value))
 				if !regexpcache.MustCompile(`^[A-Z0-9\_]+$`).MatchString(strValue) {
 					return errors.Errorf(`the variable name "%s" is invalid, it can contain only uppercase letters, numbers and underscores`, strValue)
 				}
@@ -323,9 +254,9 @@ func (d *useTmplInputsDialog) askInput(inputDef *input.Input, isForTest bool) (s
 		}
 
 		value, _ := d.Ask(question)
-		envVar := fmt.Sprintf("KBC_SECRET_%s", value)
+		envVar := strings.ToUpper(fmt.Sprintf("KBC_SECRET_%s", value))
 		// Add the env var to the input as placeholder, that's the reason for the surrounding '##'
-		err := d.addInputValue(fmt.Sprintf("##%s##", envVar), inputDef, true)
+		err := d.addInputValue(ctx, fmt.Sprintf("##%s##", envVar), inputDef, true)
 		if err != nil {
 			return "", err
 		}
@@ -342,7 +273,7 @@ func (d *useTmplInputsDialog) askInput(inputDef *input.Input, isForTest bool) (s
 				if err != nil {
 					return err
 				}
-				return inputDef.ValidateUserInput(value)
+				return inputDef.ValidateUserInput(ctx, value)
 			},
 			Default: cast.ToString(inputDef.Default),
 			Hidden:  inputDef.Kind == input.KindHidden,
@@ -355,14 +286,14 @@ func (d *useTmplInputsDialog) askInput(inputDef *input.Input, isForTest bool) (s
 			value, _ = d.Ask(question)
 		}
 
-		return "", d.addInputValue(value, inputDef, true)
+		return "", d.addInputValue(ctx, value, inputDef, true)
 	case input.KindConfirm:
 		confirm := &prompt.Confirm{
 			Label:       inputDef.Name,
 			Description: inputDef.Description,
 		}
 		confirm.Default, _ = inputDef.Default.(bool)
-		return "", d.addInputValue(d.Confirm(confirm), inputDef, true)
+		return "", d.addInputValue(ctx, d.Confirm(confirm), inputDef, true)
 	case input.KindSelect:
 		selectPrompt := &prompt.SelectIndex{
 			Label:       inputDef.Name,
@@ -370,7 +301,7 @@ func (d *useTmplInputsDialog) askInput(inputDef *input.Input, isForTest bool) (s
 			Options:     inputDef.Options.Names(),
 			UseDefault:  true,
 			Validator: func(answerRaw any) error {
-				return inputDef.ValidateUserInput(answerRaw.(survey.OptionAnswer).Value)
+				return inputDef.ValidateUserInput(ctx, answerRaw.(survey.OptionAnswer).Value)
 			},
 		}
 		if inputDef.Default != nil {
@@ -379,7 +310,7 @@ func (d *useTmplInputsDialog) askInput(inputDef *input.Input, isForTest bool) (s
 			}
 		}
 		selectedIndex, _ := d.SelectIndex(selectPrompt)
-		return "", d.addInputValue(inputDef.Options[selectedIndex].Value, inputDef, true)
+		return "", d.addInputValue(ctx, inputDef.Options[selectedIndex].Value, inputDef, true)
 	case input.KindMultiSelect:
 		multiSelect := &prompt.MultiSelectIndex{
 			Label:       inputDef.Name,
@@ -391,7 +322,7 @@ func (d *useTmplInputsDialog) askInput(inputDef *input.Input, isForTest bool) (s
 				for i, v := range answers {
 					values[i] = v.Value
 				}
-				return inputDef.ValidateUserInput(values)
+				return inputDef.ValidateUserInput(ctx, values)
 			},
 		}
 		// Default indices
@@ -411,21 +342,21 @@ func (d *useTmplInputsDialog) askInput(inputDef *input.Input, isForTest bool) (s
 			selectedValues = append(selectedValues, inputDef.Options[selectedIndex].Value)
 		}
 		// Save value
-		return "", d.addInputValue(selectedValues, inputDef, true)
+		return "", d.addInputValue(ctx, selectedValues, inputDef, true)
 	case input.KindOAuth:
 		// OAuth is not supported in CLI dialog.
-		return "", d.addInputValue(d.defaultOrEmptyValueFor(inputDef), inputDef, true)
+		return "", d.addInputValue(ctx, d.defaultOrEmptyValueFor(inputDef), inputDef, true)
 	case input.KindOAuthAccounts:
 		// OAuth is not supported in CLI dialog.
-		return "", d.addInputValue(d.defaultOrEmptyValueFor(inputDef), inputDef, true)
+		return "", d.addInputValue(ctx, d.defaultOrEmptyValueFor(inputDef), inputDef, true)
 	}
 
 	return "", nil
 }
 
 // addInputValue from CLI dialog or inputs file.
-func (d *useTmplInputsDialog) addInputValue(value any, inputDef *input.Input, isFilled bool) error {
-	inputValue, err := template.ParseInputValue(value, inputDef, isFilled)
+func (d *useTmplInputsDialog) addInputValue(ctx context.Context, value any, inputDef *input.Input, isFilled bool) error {
+	inputValue, err := template.ParseInputValue(ctx, value, inputDef, isFilled)
 	if err != nil {
 		return err
 	}

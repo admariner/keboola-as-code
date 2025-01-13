@@ -1,5 +1,5 @@
 # Build container
-FROM golang:1.19.2-alpine3.16 AS buildContainer
+FROM golang:1.23.4-alpine3.20 AS buildContainer
 RUN apk add -U --no-cache bash make curl
 WORKDIR /app
 
@@ -15,7 +15,7 @@ COPY . .
 RUN make build-templates-api
 
 # Production container
-FROM alpine:3.16
+FROM alpine:3.20
 RUN apk add -U --no-cache ca-certificates git
 
 COPY --from=buildContainer /app/target/templates/api /app/server
@@ -27,4 +27,4 @@ EXPOSE 8000
 # Prometheus metrics
 EXPOSE 9000
 
-CMD ["/app/server", "--listen-address=0.0.0.0:8000", "--metrics-listen-address=0.0.0.0:9000"]
+CMD ["/app/server", "--api-listen=0.0.0.0:8000", "--metrics-listen=0.0.0.0:9000"]

@@ -7,6 +7,7 @@ import (
 	"github.com/keboola/go-client/pkg/keboola"
 	"github.com/keboola/go-utils/pkg/orderedmap"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/mapper/template/replacevalues"
 	"github.com/keboola/keboola-as-code/internal/pkg/model"
@@ -67,7 +68,7 @@ func TestReplaceKeysMapper_OnRemoteChange(t *testing.T) {
 	// Run mapper
 	changes := model.NewRemoteChanges()
 	changes.AddLoaded(config, row)
-	assert.NoError(t, s.Mapper().AfterRemoteOperation(context.Background(), changes))
+	require.NoError(t, s.Mapper().AfterRemoteOperation(context.Background(), changes))
 
 	// Check result state
 	assert.Equal(t, []model.ObjectState{
@@ -120,7 +121,7 @@ func TestReplaceKeysMapper_OnRemoteChange(t *testing.T) {
 
 func createStateWithMapper(t *testing.T, replacements *replacevalues.Values) *state.State {
 	t.Helper()
-	d := dependencies.NewMocked(t)
+	d := dependencies.NewMocked(t, context.Background())
 	mockedState := d.MockedState()
 	mockedState.Mapper().AddMapper(replacevalues.NewMapper(mockedState, replacements))
 	return mockedState

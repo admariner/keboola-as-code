@@ -17,11 +17,11 @@ const componentID = keboola.ComponentID("keboola.keboola-as-code")
 
 type Sender struct {
 	logger    log.Logger
-	client    *keboola.API
+	client    *keboola.AuthorizedAPI
 	projectID keboola.ProjectID
 }
 
-func NewSender(logger log.Logger, client *keboola.API, projectID keboola.ProjectID) Sender {
+func NewSender(logger log.Logger, client *keboola.AuthorizedAPI, projectID keboola.ProjectID) Sender {
 	return Sender{logger: logger, client: client, projectID: projectID}
 }
 
@@ -58,10 +58,10 @@ func (s Sender) SendCmdEvent(ctx context.Context, cmdStart time.Time, errPtr *er
 // sendCmdSuccessful send command successful event.
 func (s Sender) sendCmdSuccessfulEvent(ctx context.Context, cmdStart time.Time, cmd, msg string) {
 	duration := time.Since(cmdStart)
-	params := map[string]interface{}{
+	params := map[string]any{
 		"command": cmd,
 	}
-	results := map[string]interface{}{
+	results := map[string]any{
 		"projectId": s.projectID,
 	}
 	event, err := s.client.CreateEventRequest(&keboola.Event{
@@ -73,19 +73,19 @@ func (s Sender) sendCmdSuccessfulEvent(ctx context.Context, cmdStart time.Time, 
 		Results:     results,
 	}).Send(ctx)
 	if err == nil {
-		s.logger.Debugf("Sent \"%s\" successful event id: \"%s\"", cmd, event.ID)
+		s.logger.Debugf(ctx, "Sent \"%s\" successful event id: \"%s\"", cmd, event.ID)
 	} else {
-		s.logger.Warnf("Cannot send \"%s\" successful event: %s", cmd, err)
+		s.logger.Warnf(ctx, "Cannot send \"%s\" successful event: %s", cmd, err)
 	}
 }
 
 // sendCmdFailed send command failed event.
 func (s Sender) sendCmdFailedEvent(ctx context.Context, cmdStart time.Time, err error, cmd, msg string) {
 	duration := time.Since(cmdStart)
-	params := map[string]interface{}{
+	params := map[string]any{
 		"command": cmd,
 	}
-	results := map[string]interface{}{
+	results := map[string]any{
 		"projectId": s.projectID,
 		"error":     fmt.Sprintf("%s", err),
 	}
@@ -98,8 +98,8 @@ func (s Sender) sendCmdFailedEvent(ctx context.Context, cmdStart time.Time, err 
 		Results:     results,
 	}).Send(ctx)
 	if err == nil {
-		s.logger.Debugf("Sent \"%s\" failed event id: \"%s\"", cmd, event.ID)
+		s.logger.Debugf(ctx, "Sent \"%s\" failed event id: \"%s\"", cmd, event.ID)
 	} else {
-		s.logger.Warnf("Cannot send \"%s\" failed event: %s", cmd, err)
+		s.logger.Warnf(ctx, "Cannot send \"%s\" failed event: %s", cmd, err)
 	}
 }

@@ -14,7 +14,7 @@ import (
 
 type dependencies interface {
 	Fs() filesystem.Fs
-	LocalProject(ignoreErrors bool) (*project.Project, bool, error)
+	LocalProject(ctx context.Context, ignoreErrors bool) (*project.Project, bool, error)
 	LocalTemplate(ctx context.Context) (*template.Template, bool, error)
 	LocalTemplateRepository(ctx context.Context) (*repository.Repository, bool, error)
 	LocalDbtProject(ctx context.Context) (*dbt.Project, bool, error)
@@ -28,14 +28,14 @@ func Run(ctx context.Context, d dependencies) (err error) {
 
 	logger := d.Logger()
 
-	if prj, found, err := d.LocalProject(false); found {
+	if prj, found, err := d.LocalProject(ctx, false); found {
 		if err != nil {
 			return err
 		}
 
-		logger.Infof("Project directory:  %s", prj.Fs().BasePath())
-		logger.Infof("Working directory:  %s", prj.Fs().WorkingDir())
-		logger.Infof("Manifest path:      %s", prj.Manifest().Path())
+		logger.Infof(ctx, "Project directory:  %s", prj.Fs().BasePath())
+		logger.Infof(ctx, "Working directory:  %s", prj.Fs().WorkingDir())
+		logger.Infof(ctx, "Manifest path:      %s", prj.Manifest().Path())
 		return nil
 	}
 
@@ -44,9 +44,9 @@ func Run(ctx context.Context, d dependencies) (err error) {
 			return err
 		}
 
-		logger.Infof("Template directory:  %s", tmpl.Fs().BasePath())
-		logger.Infof("Working directory:   %s", tmpl.Fs().WorkingDir())
-		logger.Infof("Manifest path:       %s", tmpl.ManifestPath())
+		logger.Infof(ctx, "Template directory:  %s", tmpl.Fs().BasePath())
+		logger.Infof(ctx, "Working directory:   %s", tmpl.Fs().WorkingDir())
+		logger.Infof(ctx, "Manifest path:       %s", tmpl.ManifestPath())
 		return nil
 	}
 
@@ -55,9 +55,9 @@ func Run(ctx context.Context, d dependencies) (err error) {
 			return err
 		}
 
-		logger.Infof("Repository directory:  %s", repo.Fs().BasePath())
-		logger.Infof("Working directory:     %s", repo.Fs().WorkingDir())
-		logger.Infof("Manifest path:         %s", repo.Manifest().Path())
+		logger.Infof(ctx, "Repository directory:  %s", repo.Fs().BasePath())
+		logger.Infof(ctx, "Working directory:     %s", repo.Fs().WorkingDir())
+		logger.Infof(ctx, "Manifest path:         %s", repo.Manifest().Path())
 		return nil
 	}
 
@@ -66,11 +66,11 @@ func Run(ctx context.Context, d dependencies) (err error) {
 			return err
 		}
 
-		logger.Infof("Dbt project directory:  %s", prj.Fs().BasePath())
-		logger.Infof("Working directory:      %s", prj.Fs().WorkingDir())
+		logger.Infof(ctx, "Dbt project directory:  %s", prj.Fs().BasePath())
+		logger.Infof(ctx, "Working directory:      %s", prj.Fs().WorkingDir())
 		return nil
 	}
 
-	logger.Warnf(`Directory "%s" is not a project or template repository.`, d.Fs().BasePath())
+	logger.Warnf(ctx, `Directory "%s" is not a project or template repository.`, d.Fs().BasePath())
 	return nil
 }

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"sort"
 	"strings"
 	"time"
@@ -44,7 +45,7 @@ type Object interface {
 	Key
 	Key() Key
 	ObjectName() string
-	SetObjectID(any)
+	SetObjectID(objectID any)
 }
 
 type ToAPIObject interface {
@@ -91,7 +92,7 @@ type ObjectStates interface {
 	GetOrCreateFrom(manifest ObjectManifest) (ObjectState, error)
 	Set(objectState ObjectState) error
 	TrackedPaths() []string
-	ReloadPathsState() error
+	ReloadPathsState(ctx context.Context) error
 	IsFile(path string) bool
 	IsDir(path string) bool
 }
@@ -454,7 +455,9 @@ func (m ConfigMetadata) AddRowInputUsage(rowID keboola.RowID, inputName string, 
 func (m ConfigMetadata) SetTemplateInstance(repo string, tmpl string, inst string) {
 	m[repositoryMetadataKey] = repo
 	m[templateIDMetadataKey] = tmpl
-	m[instanceIDMetadataKey] = inst
+	if inst != "" {
+		m[instanceIDMetadataKey] = inst
+	}
 }
 
 func (m ConfigMetadata) Repository() string {
@@ -476,11 +479,11 @@ type Config struct {
 	Description    string                 `json:"description" diff:"true" descriptionFile:"true"`
 	IsDisabled     bool                   `json:"isDisabled" diff:"true" metaFile:"true"`
 	Content        *orderedmap.OrderedMap `json:"configuration" validate:"required" diff:"true" configFile:"true"`
-	Transformation *Transformation        `json:"-" validate:"omitempty,dive" diff:"true"`
-	SharedCode     *SharedCodeConfig      `json:"-" validate:"omitempty,dive" diff:"true"`
-	Orchestration  *Orchestration         `json:"-" validate:"omitempty,dive" diff:"true"`
 	Relations      Relations              `json:"-" validate:"dive" diff:"true"`
-	Metadata       ConfigMetadata         `json:"-" validate:"dive" diff:"true"`
+	Transformation *Transformation        `json:"-" diff:"true"`
+	SharedCode     *SharedCodeConfig      `json:"-" diff:"true"`
+	Orchestration  *Orchestration         `json:"-" diff:"true"`
+	Metadata       ConfigMetadata         `json:"-" diff:"true"`
 }
 
 type ConfigWithRows struct {
@@ -501,16 +504,16 @@ type ConfigRow struct {
 	Description string                 `json:"description" diff:"true" descriptionFile:"true"`
 	IsDisabled  bool                   `json:"isDisabled" diff:"true" metaFile:"true"`
 	Content     *orderedmap.OrderedMap `json:"configuration" validate:"required" diff:"true" configFile:"true"`
-	SharedCode  *SharedCodeRow         `json:"-" validate:"omitempty,dive" diff:"true"`
 	Relations   Relations              `json:"-" validate:"dive" diff:"true"`
+	SharedCode  *SharedCodeRow         `json:"-" diff:"true"`
 }
 
 // Job - Storage API job.
 type Job struct {
-	ID      int                    `json:"id" validate:"required"`
-	Status  string                 `json:"status" validate:"required"`
-	URL     string                 `json:"url" validate:"required"`
-	Results map[string]interface{} `json:"results"`
+	ID      int            `json:"id" validate:"required"`
+	Status  string         `json:"status" validate:"required"`
+	URL     string         `json:"url" validate:"required"`
+	Results map[string]any `json:"results"`
 }
 
 func (b *Branch) ObjectName() string {

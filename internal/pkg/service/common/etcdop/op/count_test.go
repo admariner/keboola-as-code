@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	etcd "go.etcd.io/etcd/client/v3"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/utils/etcdhelper"
@@ -15,29 +16,29 @@ func TestCountOp(t *testing.T) {
 	ctx := context.Background()
 	client := etcdhelper.ClientForTest(t, etcdhelper.TmpNamespace(t))
 
-	factory := func(ctx context.Context) (etcd.Op, error) {
+	factoryFn := func(ctx context.Context) (etcd.Op, error) {
 		return etcd.OpGet("test", etcd.WithPrefix()), nil
 	}
 
-	mapper := func(ctx context.Context, r etcd.OpResponse) (int64, error) {
-		return r.Get().Count, nil
+	mapper := func(ctx context.Context, raw *RawResponse) (int64, error) {
+		return raw.Get().Count, nil
 	}
 
-	count, err := NewCountOp(factory, mapper).Do(ctx, client)
-	assert.NoError(t, err)
+	count, err := NewCountOp(client, factoryFn, mapper).Do(ctx).ResultOrErr()
+	require.NoError(t, err)
 	assert.Equal(t, int64(0), count)
 
 	_, err = client.Put(ctx, "test/0", "test0")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
-	count, err = NewCountOp(factory, mapper).Do(ctx, client)
-	assert.NoError(t, err)
+	count, err = NewCountOp(client, factoryFn, mapper).Do(ctx).ResultOrErr()
+	require.NoError(t, err)
 	assert.Equal(t, int64(1), count)
 
 	_, err = client.Put(ctx, "test/1", "test1")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
-	count, err = NewCountOp(factory, mapper).Do(ctx, client)
-	assert.NoError(t, err)
+	count, err = NewCountOp(client, factoryFn, mapper).Do(ctx).ResultOrErr()
+	require.NoError(t, err)
 	assert.Equal(t, int64(2), count)
 }

@@ -1,5 +1,0 @@
-{
-  "statusCode": 404,
-  "error": "buffer.endpointNotFound",
-  "message": "No endpoint found for path \"/foo/bar\"."
-}

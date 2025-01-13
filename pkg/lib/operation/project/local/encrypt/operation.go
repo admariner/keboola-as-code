@@ -2,6 +2,7 @@ package encrypt
 
 import (
 	"context"
+	"io"
 
 	"github.com/keboola/go-client/pkg/keboola"
 
@@ -17,10 +18,11 @@ type Options struct {
 }
 
 type dependencies interface {
-	KeboolaProjectAPI() *keboola.API
+	KeboolaProjectAPI() *keboola.AuthorizedAPI
 	Logger() log.Logger
 	ProjectID() keboola.ProjectID
 	Telemetry() telemetry.Telemetry
+	Stdout() io.Writer
 }
 
 func Run(ctx context.Context, projectState *project.State, o Options, d dependencies) (err error) {
@@ -37,13 +39,13 @@ func Run(ctx context.Context, projectState *project.State, o Options, d dependen
 
 	// Log plan
 	if !plan.Empty() || o.LogEmpty {
-		plan.Log(logger)
+		plan.Log(d.Stdout())
 	}
 
 	if !plan.Empty() {
 		// Dry run?
 		if o.DryRun {
-			logger.Info("Dry run, nothing changed.")
+			logger.Info(ctx, "Dry run, nothing changed.")
 			return nil
 		}
 
@@ -52,7 +54,7 @@ func Run(ctx context.Context, projectState *project.State, o Options, d dependen
 			return err
 		}
 
-		d.Logger().Info("Encrypt done.")
+		d.Logger().Info(ctx, "Encrypt done.")
 	}
 
 	return nil

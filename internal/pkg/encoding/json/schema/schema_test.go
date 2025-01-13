@@ -1,12 +1,14 @@
 package schema_test
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/keboola/go-client/pkg/keboola"
 	"github.com/keboola/go-utils/pkg/orderedmap"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	. "github.com/keboola/keboola-as-code/internal/pkg/encoding/json/schema"
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem/knownpaths"
@@ -26,7 +28,7 @@ func TestValidateObjects_Ok(t *testing.T) {
 	})
 	content := orderedmap.New()
 	content.Set(`parameters`, parameters)
-	assert.NoError(t, ValidateContent(schema, content))
+	require.NoError(t, ValidateContent(schema, content))
 }
 
 func TestValidateObjects_Error(t *testing.T) {
@@ -45,7 +47,7 @@ func TestValidateObjects_Error(t *testing.T) {
 	content := orderedmap.New()
 	content.Set(`parameters`, parameters)
 	err := ValidateContent(schema, content)
-	assert.Error(t, err)
+	require.Error(t, err)
 	expectedErr := `
 - missing properties: "firstName"
 - "address": missing properties: "street"
@@ -67,7 +69,7 @@ func TestValidateObjects_InvalidSchema_InvalidJSON(t *testing.T) {
 			}),
 		},
 	}))
-	assert.Error(t, err)
+	require.Error(t, err)
 	expected := `
 invalid JSON schema:
 - invalid character '.' looking for beginning of object key string, offset: 2
@@ -208,7 +210,7 @@ func TestValidateObjects_InvalidSchema_InvalidType(t *testing.T) {
 			Value: orderedmap.FromPairs([]orderedmap.Pair{{Key: "key", Value: "value"}}),
 		},
 	}))
-	assert.Error(t, err)
+	require.Error(t, err)
 	expected := `
 invalid JSON schema:
 - allOf failed:
@@ -226,7 +228,7 @@ func TestValidateObjects_BooleanRequired(t *testing.T) {
 	// But, for historical reasons, in Keboola components, "required: true" is also used.
 	// In the UI, this causes the drop-down list to not have an empty value.
 	// For this reason,the error should be ignored.
-	assert.NoError(t, ValidateContent(invalidSchema, orderedmap.FromPairs([]orderedmap.Pair{
+	require.NoError(t, ValidateContent(invalidSchema, orderedmap.FromPairs([]orderedmap.Pair{
 		{
 			Key: "parameters",
 			Value: orderedmap.FromPairs([]orderedmap.Pair{
@@ -241,7 +243,7 @@ func TestValidateObjects_SkipEmpty(t *testing.T) {
 	t.Parallel()
 	schema := getTestSchema()
 	content := orderedmap.New()
-	assert.NoError(t, ValidateContent(schema, content))
+	require.NoError(t, ValidateContent(schema, content))
 }
 
 func TestValidateObjects_InvalidSchema_Warning1(t *testing.T) {
@@ -319,12 +321,12 @@ func testInvalidComponentSchema(t *testing.T, invalidSchema []byte, expectedLogs
 			}),
 		},
 	})
-	registry := state.NewRegistry(knownpaths.NewNop(), naming.NewRegistry(), components, model.SortByID)
-	assert.NoError(t, registry.Set(&model.ConfigState{
+	registry := state.NewRegistry(knownpaths.NewNop(context.Background()), naming.NewRegistry(), components, model.SortByID)
+	require.NoError(t, registry.Set(&model.ConfigState{
 		ConfigManifest: &model.ConfigManifest{ConfigKey: model.ConfigKey{ComponentID: componentID}},
 		Local:          &model.Config{Content: someContent},
 	}))
-	assert.NoError(t, registry.Set(&model.ConfigRowState{
+	require.NoError(t, registry.Set(&model.ConfigRowState{
 		ConfigRowManifest: &model.ConfigRowManifest{ConfigRowKey: model.ConfigRowKey{ComponentID: componentID}},
 		Local:             &model.ConfigRow{Content: someContent},
 	}))
@@ -332,8 +334,8 @@ func testInvalidComponentSchema(t *testing.T, invalidSchema []byte, expectedLogs
 	// Validate, no error
 	content := orderedmap.New()
 	content.Set(`parameters`, orderedmap.New())
-	assert.NoError(t, ValidateObjects(logger, registry))
-	assert.Equal(t, strings.TrimLeft(expectedLogs, "\n"), logger.AllMessages())
+	require.NoError(t, ValidateObjects(context.Background(), logger, registry))
+	assert.Equal(t, strings.TrimLeft(expectedLogs, "\n"), logger.AllMessagesTxt())
 }
 
 func getTestSchema() []byte {

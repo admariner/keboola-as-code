@@ -11,23 +11,27 @@ import (
 	"github.com/keboola/go-client/pkg/keboola"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/encoding/jsonnet"
+	"github.com/keboola/keboola-as-code/internal/pkg/idgenerator"
 	"github.com/keboola/keboola-as-code/internal/pkg/model"
 	"github.com/keboola/keboola-as-code/internal/pkg/template/input"
 	"github.com/keboola/keboola-as-code/internal/pkg/utils/errors"
+	"github.com/keboola/keboola-as-code/internal/pkg/utils/strhelper"
 )
 
 const (
 	SnowflakeWriterIDAws   = keboola.ComponentID("keboola.wr-db-snowflake")
 	SnowflakeWriterIDAzure = keboola.ComponentID("keboola.wr-snowflake-blob-storage")
+	SnowflakeWriterIDGCP   = keboola.ComponentID("keboola.wr-db-snowflake-gcs")
+	SnowflakeWriterIDGCPS3 = keboola.ComponentID("keboola.wr-db-snowflake-gcs-s3")
 )
 
 // ConfigID Jsonnet function maps configuration ID used in the template
 // to configuration ID used in the project.
-func ConfigID(idMapper func(id interface{}) string) *jsonnet.NativeFunction {
+func ConfigID(idMapper func(id any) string) *jsonnet.NativeFunction {
 	return &jsonnet.NativeFunction{
 		Name:   `ConfigId`,
 		Params: ast.Identifiers{"id"},
-		Func: func(params []interface{}) (interface{}, error) {
+		Func: func(params []any) (any, error) {
 			if len(params) != 1 {
 				return nil, errors.Errorf("one parameter expected, found %d", len(params))
 			} else if id, ok := params[0].(string); !ok {
@@ -41,11 +45,11 @@ func ConfigID(idMapper func(id interface{}) string) *jsonnet.NativeFunction {
 
 // ConfigRowID Jsonnet function maps configuration row ID used in the template
 // to configuration ID used in the project.
-func ConfigRowID(idMapper func(id interface{}) string) *jsonnet.NativeFunction {
+func ConfigRowID(idMapper func(id any) string) *jsonnet.NativeFunction {
 	return &jsonnet.NativeFunction{
 		Name:   `ConfigRowId`,
 		Params: ast.Identifiers{"id"},
-		Func: func(params []interface{}) (interface{}, error) {
+		Func: func(params []any) (any, error) {
 			if len(params) != 1 {
 				return nil, errors.Errorf("one parameter expected, found %d", len(params))
 			} else if id, ok := params[0].(string); !ok {
@@ -62,7 +66,7 @@ func Input(inputValueProvider func(inputID string) (input.Value, bool)) *jsonnet
 	return &jsonnet.NativeFunction{
 		Name:   `Input`,
 		Params: ast.Identifiers{"id"},
-		Func: func(params []interface{}) (interface{}, error) {
+		Func: func(params []any) (any, error) {
 			if len(params) != 1 {
 				return nil, errors.Errorf("one parameter expected, found %d", len(params))
 			} else if id, ok := params[0].(string); !ok {
@@ -86,7 +90,7 @@ func InputIsAvailable(inputValueProvider func(inputID string) (input.Value, bool
 	return &jsonnet.NativeFunction{
 		Name:   `InputIsAvailable`,
 		Params: ast.Identifiers{"id"},
-		Func: func(params []interface{}) (interface{}, error) {
+		Func: func(params []any) (any, error) {
 			if len(params) != 1 {
 				return nil, errors.Errorf("one parameter expected, found %d", len(params))
 			} else if id, ok := params[0].(string); !ok {
@@ -105,7 +109,7 @@ func InstanceID(instanceID string) *jsonnet.NativeFunction {
 	return &jsonnet.NativeFunction{
 		Name:   `InstanceId`,
 		Params: ast.Identifiers{},
-		Func: func(params []interface{}) (interface{}, error) {
+		Func: func(params []any) (any, error) {
 			return instanceID, nil
 		},
 	}
@@ -116,8 +120,20 @@ func InstanceIDShort(instanceIDShort string) *jsonnet.NativeFunction {
 	return &jsonnet.NativeFunction{
 		Name:   `InstanceIdShort`,
 		Params: ast.Identifiers{},
-		Func: func(params []interface{}) (interface{}, error) {
+		Func: func(params []any) (any, error) {
 			return instanceIDShort, nil
+		},
+	}
+}
+
+// RandomID Jsonnet function returns a random, shortened id of the template instance.
+func RandomID() *jsonnet.NativeFunction {
+	return &jsonnet.NativeFunction{
+		Name:   `RandomID`,
+		Params: ast.Identifiers{},
+		Func: func(params []any) (any, error) {
+			instanceID := idgenerator.TemplateInstanceID()
+			return strhelper.FirstN(instanceID, 8), nil
 		},
 	}
 }
@@ -127,7 +143,7 @@ func ComponentIsAvailable(components *model.ComponentsMap) *jsonnet.NativeFuncti
 	return &jsonnet.NativeFunction{
 		Name:   `ComponentIsAvailable`,
 		Params: ast.Identifiers{"componentId"},
-		Func: func(params []interface{}) (interface{}, error) {
+		Func: func(params []any) (any, error) {
 			if len(params) != 1 {
 				return nil, errors.Errorf("one parameter expected, found %d", len(params))
 			} else if componentID, ok := params[0].(string); !ok {
@@ -145,14 +161,36 @@ func SnowflakeWriterComponentID(components *model.ComponentsMap) *jsonnet.Native
 	return &jsonnet.NativeFunction{
 		Name:   `SnowflakeWriterComponentId`,
 		Params: ast.Identifiers{},
-		Func: func(params []interface{}) (interface{}, error) {
+		Func: func(params []any) (any, error) {
 			if _, found := components.Get(SnowflakeWriterIDAws); found {
 				return SnowflakeWriterIDAws.String(), nil
 			} else if _, found := components.Get(SnowflakeWriterIDAzure); found {
 				return SnowflakeWriterIDAzure.String(), nil
+			} else if _, found := components.Get(SnowflakeWriterIDGCPS3); found {
+				return SnowflakeWriterIDGCPS3.String(), nil
 			} else {
 				return nil, errors.New("no Snowflake Writer component found")
 			}
+		},
+	}
+}
+
+// HasProjectBackend Jsonnet function returns true if the project backend is available, otherwise false.
+func HasProjectBackend(backends []string) *jsonnet.NativeFunction {
+	return &jsonnet.NativeFunction{
+		Name:   `HasProjectBackend`,
+		Params: ast.Identifiers{"backend"},
+		Func: func(params []any) (any, error) {
+			if len(params) != 1 {
+				return nil, errors.Errorf("one parameter expected, found %d", len(params))
+			}
+
+			for _, backend := range backends {
+				if backend == params[0] {
+					return true, nil
+				}
+			}
+			return false, nil
 		},
 	}
 }

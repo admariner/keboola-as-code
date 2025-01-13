@@ -3,17 +3,20 @@ package dependencies
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 
-	"github.com/benbjohnson/clock"
 	"github.com/jarcoal/httpmock"
+	"github.com/jonboulle/clockwork"
 	"github.com/keboola/go-client/pkg/client"
 	"github.com/keboola/go-client/pkg/keboola"
 	"github.com/stretchr/testify/require"
 	etcdPkg "go.etcd.io/etcd/client/v3"
 
+	"github.com/keboola/keboola-as-code/internal/pkg/env"
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem"
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem/aferofs"
 	"github.com/keboola/keboola-as-code/internal/pkg/fixtures"
@@ -32,10 +35,6 @@ import (
 	"github.com/keboola/keboola-as-code/internal/pkg/utils/testproject"
 )
 
-const (
-	distributionGroup = "my-group"
-)
-
 // mocked dependencies container implements Mocked interface.
 type mocked struct {
 	*baseScope
@@ -43,29 +42,25 @@ type mocked struct {
 	*projectScope
 	*requestInfo
 	*etcdClientScope
-	*taskScope
-	*distributionScope
-	*orchestratorScope
-	t                   *testing.T
+	t                   testing.TB
 	config              *MockedConfig
 	mockedHTTPTransport *httpmock.MockTransport
 	testEtcdClient      *etcdPkg.Client
 }
 
 type MockedConfig struct {
-	enableEtcdClient   bool
-	enableTasks        bool
-	enableDistribution bool
-	enableOrchestrator bool
+	enableEtcdClient bool
 
-	ctx          context.Context
-	clock        clock.Clock
-	telemetry    telemetry.ForTest
-	loggerPrefix string
-	debugLogger  log.DebugLogger
-	procOpts     []servicectx.Option
+	clock       clockwork.Clock
+	telemetry   telemetry.ForTest
+	debugLogger log.DebugLogger
+	procOpts    []servicectx.Option
 
-	etcdCredentials etcdclient.Credentials
+	etcdConfig   etcdclient.Config
+	etcdDebugLog bool
+
+	stdout io.Writer
+	stderr io.Writer
 
 	services                  keboola.Services
 	features                  keboola.Features
@@ -75,7 +70,8 @@ type MockedConfig struct {
 	multipleTokenVerification bool
 
 	useRealAPIs       bool
-	keboolaProjectAPI *keboola.API
+	useRealHTTPClient bool
+	keboolaProjectAPI *keboola.AuthorizedAPI
 }
 
 type MockedOption func(c *MockedConfig)
@@ -86,35 +82,19 @@ func WithEnabledEtcdClient() MockedOption {
 	}
 }
 
-func WithEnabledTasks() MockedOption {
+func WithSnowflakeBackend() MockedOption {
 	return func(c *MockedConfig) {
-		WithEnabledEtcdClient()(c)
-		c.enableTasks = true
+		c.storageAPIToken.Owner.HasSnowflake = true
 	}
 }
 
-func WithEnabledDistribution() MockedOption {
+func WithBigQueryBackend() MockedOption {
 	return func(c *MockedConfig) {
-		WithEnabledEtcdClient()(c)
-		c.enableDistribution = true
+		c.storageAPIToken.Owner.HasBigquery = true
 	}
 }
 
-func WithEnabledOrchestrator() MockedOption {
-	return func(c *MockedConfig) {
-		WithEnabledTasks()(c)
-		WithEnabledDistribution()(c)
-		c.enableOrchestrator = true
-	}
-}
-
-func WithCtx(v context.Context) MockedOption {
-	return func(c *MockedConfig) {
-		c.ctx = v
-	}
-}
-
-func WithClock(v clock.Clock) MockedOption {
+func WithClock(v clockwork.Clock) MockedOption {
 	return func(c *MockedConfig) {
 		c.clock = v
 	}
@@ -126,21 +106,29 @@ func WithDebugLogger(v log.DebugLogger) MockedOption {
 	}
 }
 
-func WithLoggerPrefix(v string) MockedOption {
+func WithStdout(v io.Writer) MockedOption {
 	return func(c *MockedConfig) {
-		c.loggerPrefix = v
+		c.stdout = v
 	}
 }
 
-func WithEtcdCredentials(credentials etcdclient.Credentials) MockedOption {
+func WithStderr(v io.Writer) MockedOption {
+	return func(c *MockedConfig) {
+		c.stderr = v
+	}
+}
+
+func WithEtcdConfig(cfg etcdclient.Config) MockedOption {
 	return func(c *MockedConfig) {
 		WithEnabledEtcdClient()(c)
-		c.etcdCredentials = credentials
+		c.etcdConfig = cfg
 	}
 }
 
-func WithUniqueID(v string) MockedOption {
-	return WithProcessOptions(servicectx.WithUniqueID(v))
+func WithEtcdDebugLog(v bool) MockedOption {
+	return func(c *MockedConfig) {
+		c.etcdDebugLog = v
+	}
 }
 
 func WithProcessOptions(opts ...servicectx.Option) MockedOption {
@@ -160,7 +148,7 @@ func WithTestProject(project *testproject.Project) MockedOption {
 		c.storageAPIToken = *project.StorageAPIToken()
 
 		c.useRealAPIs = true
-		c.keboolaProjectAPI = project.KeboolaProjectAPI()
+		c.keboolaProjectAPI = project.ProjectAPI()
 	}
 }
 
@@ -207,13 +195,18 @@ func WithMultipleTokenVerification(v bool) MockedOption {
 	}
 }
 
-func newMockedConfig(t *testing.T, opts []MockedOption) *MockedConfig {
-	t.Helper()
+func WithRealHTTPClient() MockedOption {
+	return func(c *MockedConfig) {
+		c.useRealHTTPClient = true
+	}
+}
+
+func newMockedConfig(tb testing.TB, opts []MockedOption) *MockedConfig {
+	tb.Helper()
 
 	cfg := &MockedConfig{
-		ctx:         context.Background(),
-		clock:       clock.New(),
-		telemetry:   telemetry.NewForTest(t),
+		clock:       clockwork.NewRealClock(),
+		telemetry:   telemetry.NewForTest(tb),
 		useRealAPIs: false,
 		services: keboola.Services{
 			{ID: "encryption", URL: "https://encryption.mocked.transport.http"},
@@ -247,101 +240,95 @@ func newMockedConfig(t *testing.T, opts []MockedOption) *MockedConfig {
 		cfg.debugLogger.ConnectTo(testhelper.VerboseStdout())
 	}
 
+	if cfg.stdout == nil {
+		cfg.stdout = os.Stdout // nolint:forbidigo
+	}
+
+	if cfg.stderr == nil {
+		cfg.stderr = os.Stderr // nolint:forbidigo
+	}
+
 	return cfg
 }
 
-func NewMocked(t *testing.T, opts ...MockedOption) Mocked {
-	t.Helper()
+func NewMocked(tb testing.TB, ctx context.Context, opts ...MockedOption) Mocked {
+	tb.Helper()
 
 	// Default values
-	cfg := newMockedConfig(t, opts)
+	cfg := newMockedConfig(tb, opts)
 
 	// Logger
 	var logger log.Logger = cfg.debugLogger
-	if cfg.loggerPrefix != "" {
-		logger = logger.AddPrefix(cfg.loggerPrefix)
-	}
-
-	// Cancel context after the test
-	var cancel context.CancelFunc
-	cfg.ctx, cancel = context.WithCancel(cfg.ctx)
-	t.Cleanup(func() {
-		cancel()
-	})
 
 	// Mock APIs
 	httpClient, mockedHTTPTransport := defaultMockedResponses(cfg)
 
-	// Create service process
-	cfg.procOpts = append([]servicectx.Option{servicectx.WithLogger(logger)}, cfg.procOpts...)
-	proc := servicectx.NewForTest(t, cfg.ctx, cfg.procOpts...)
+	// Create temporary etcd namespace, see "TmpNamespace" function for details.
+	// It should be deleted at the end via t.Cleanup as the LAST thing, therefore it is initialized as the first.
+	if cfg.enableEtcdClient && cfg.etcdConfig.Endpoint == "" {
+		cfg.etcdConfig = etcdhelper.TmpNamespace(tb)
+	}
+
+	// Create service process, WithoutSignals - so it doesn't block Ctrl+C in tests
+	cfg.procOpts = append([]servicectx.Option{servicectx.WithLogger(logger), servicectx.WithoutSignals()}, cfg.procOpts...)
+	proc := servicectx.NewForTest(tb, cfg.procOpts...)
 
 	// Create dependencies container
 	var err error
-	d := &mocked{config: cfg, t: t, mockedHTTPTransport: mockedHTTPTransport}
-	d.baseScope = newBaseScope(cfg.ctx, logger, cfg.telemetry, cfg.clock, proc, httpClient)
-	d.publicScope, err = newPublicScope(cfg.ctx, d, cfg.storageAPIHost, WithPreloadComponents(true))
-	require.NoError(t, err)
-	d.projectScope, err = newProjectScope(cfg.ctx, d, cfg.storageAPIToken)
-	require.NoError(t, err)
+	d := &mocked{config: cfg, t: tb, mockedHTTPTransport: mockedHTTPTransport}
+	d.baseScope = newBaseScope(ctx, logger, cfg.telemetry, cfg.stdout, cfg.stderr, cfg.clock, proc, httpClient)
+	d.publicScope, err = newPublicScope(ctx, d, cfg.storageAPIHost, WithPreloadComponents(true))
+	require.NoError(tb, err)
+	d.projectScope, err = newProjectScope(ctx, d, cfg.storageAPIToken)
+	require.NoError(tb, err)
 	d.requestInfo = newRequestInfo(&http.Request{RemoteAddr: "1.2.3.4:789", Header: make(http.Header)})
 
 	// Use real APIs
 	if cfg.useRealAPIs {
 		d.baseScope.httpClient = client.NewTestClient()
-		d.publicScope.keboolaPublicAPI = cfg.keboolaProjectAPI
+		d.publicScope.keboolaPublicAPI = cfg.keboolaProjectAPI.PublicAPI
 		d.projectScope.keboolaProjectAPI = cfg.keboolaProjectAPI
 		d.mockedHTTPTransport = nil
 	}
 
+	if cfg.useRealHTTPClient {
+		d.baseScope.httpClient = client.NewTestClient()
+	}
+
 	if cfg.enableEtcdClient {
-		if cfg.etcdCredentials.Endpoint == "" {
-			cfg.etcdCredentials = etcdhelper.TmpNamespace(t)
+		etcdCfg := cfg.etcdConfig
+		if cfg.etcdDebugLog {
+			etcdCfg.DebugLog = true
+		} else {
+			etcdCfg.DebugLog = etcdhelper.VerboseTestLogs()
 		}
-		etcdOpts := []etcdclient.Option{
-			etcdclient.WithDebugOpLogs(etcdhelper.VerboseTestLogs()),
-		}
-		d.etcdClientScope, err = newEtcdClientScope(cfg.ctx, d, cfg.etcdCredentials, etcdOpts...)
-		require.NoError(t, err)
-	}
 
-	if cfg.enableTasks {
-		d.taskScope, err = newTaskScope(cfg.ctx, d)
-		require.NoError(t, err)
-	}
-
-	if cfg.enableDistribution {
-		d.distributionScope, err = newDistributionScope(cfg.ctx, d, distributionGroup)
-		require.NoError(t, err)
-	}
-
-	if cfg.enableOrchestrator {
-		d.orchestratorScope = newOrchestratorScope(cfg.ctx, d)
+		d.etcdClientScope, err = newEtcdClientScope(ctx, d, etcdCfg)
+		require.NoError(tb, err)
 	}
 
 	// Clear logs
 	cfg.debugLogger.Truncate()
-
 	return d
+}
+
+func (v *mocked) UseRealAPIs() bool {
+	return v.config.useRealAPIs
 }
 
 func (v *mocked) DebugLogger() log.DebugLogger {
 	return v.config.debugLogger
 }
 
-func (v *mocked) TestContext() context.Context {
-	return v.config.ctx
-}
-
 func (v *mocked) TestTelemetry() telemetry.ForTest {
 	return v.config.telemetry
 }
 
-func (v *mocked) TestEtcdCredentials() etcdclient.Credentials {
-	if v.config.etcdCredentials.Endpoint == "" {
+func (v *mocked) TestEtcdConfig() etcdclient.Config {
+	if v.config.etcdConfig.Endpoint == "" {
 		panic(errors.New("dependencies etcd client scope is not initialized"))
 	}
-	return v.config.etcdCredentials
+	return v.config.etcdConfig
 }
 
 // TestEtcdClient returns an etcd client for tests, for example to check etcd state.
@@ -351,7 +338,7 @@ func (v *mocked) TestEtcdClient() *etcdPkg.Client {
 		panic(errors.New("etcd is not enabled in the mocked dependencies"))
 	}
 	if v.testEtcdClient == nil {
-		v.testEtcdClient = etcdhelper.ClientForTest(v.t, v.config.etcdCredentials)
+		v.testEtcdClient = etcdhelper.ClientForTest(v.t, v.config.etcdConfig)
 	}
 	return v.testEtcdClient
 }
@@ -368,7 +355,7 @@ func (v *mocked) MockedRequest() *http.Request {
 }
 
 func (v *mocked) MockedProject(fs filesystem.Fs) *projectPkg.Project {
-	prj, err := projectPkg.New(context.Background(), fs, false)
+	prj, err := projectPkg.New(context.Background(), log.NewNopLogger(), fs, env.Empty(), false)
 	if err != nil {
 		panic(err)
 	}
@@ -413,17 +400,26 @@ func (c *ObjectsContainer) MappersFor(_ *state.State) (mapper.Mappers, error) {
 }
 
 func defaultMockedResponses(cfg *MockedConfig) (client.Client, *httpmock.MockTransport) {
+	// Normalize host
+	host := cfg.storageAPIHost
+	if !strings.HasPrefix(host, "https://") && !strings.HasPrefix(host, "http://") {
+		host = "https://" + host
+	}
+
 	httpClient, mockedHTTPTransport := client.NewMockedClient()
+
+	httpClient = httpClient.WithRetry(client.TestingRetry())
+
 	mockedHTTPTransport.RegisterResponder(
 		http.MethodGet,
-		fmt.Sprintf("%s/v2/storage/", cfg.storageAPIHost),
+		fmt.Sprintf("%s/v2/storage/", host),
 		httpmock.NewJsonResponderOrPanic(200, &keboola.IndexComponents{
 			Index: keboola.Index{Services: cfg.services, Features: cfg.features}, Components: cfg.components,
 		}).Once(),
 	)
 	mockedHTTPTransport.RegisterResponder(
 		http.MethodGet,
-		fmt.Sprintf("%s/v2/storage/?exclude=components", cfg.storageAPIHost),
+		fmt.Sprintf("%s/v2/storage/?exclude=components", host),
 		httpmock.NewJsonResponderOrPanic(200, &keboola.IndexComponents{
 			Index: keboola.Index{Services: cfg.services, Features: cfg.features}, Components: keboola.Components{},
 		}),
@@ -436,7 +432,7 @@ func defaultMockedResponses(cfg *MockedConfig) (client.Client, *httpmock.MockTra
 	}
 	mockedHTTPTransport.RegisterResponder(
 		http.MethodGet,
-		fmt.Sprintf("%s/v2/storage/tokens/verify", cfg.storageAPIHost),
+		fmt.Sprintf("%s/v2/storage/tokens/verify", host),
 		verificationResponder,
 	)
 

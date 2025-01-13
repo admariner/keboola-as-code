@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func DeepEqualNotSame(t *testing.T, a, b interface{}, path string) {
+func DeepEqualNotSame(t *testing.T, a, b any, path string) {
 	t.Helper()
 
 	// Equal
@@ -42,7 +42,7 @@ func DeepEqualNotSame(t *testing.T, a, b interface{}, path string) {
 	}
 	switch typeA.Kind() {
 	case reflect.Struct:
-		for i := 0; i < typeA.NumField(); i++ {
+		for i := range typeA.NumField() {
 			field := typeA.Field(i)
 			fieldA := valueA.Field(i)
 			fieldB := valueB.Field(i)
@@ -62,7 +62,7 @@ func DeepEqualNotSame(t *testing.T, a, b interface{}, path string) {
 			)
 		}
 	case reflect.Slice:
-		for i := 0; i < valueA.Len(); i++ {
+		for i := range valueA.Len() {
 			DeepEqualNotSame(
 				t,
 				valueA.Index(i).Interface(),
@@ -82,5 +82,6 @@ func DeepEqualNotSame(t *testing.T, a, b interface{}, path string) {
 				path+`.`+cast.ToString(k.Interface()),
 			)
 		}
+	default: // intentionally empty
 	}
 }

@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"fmt"
+	"slices"
+	"sort"
 	"time"
 
 	"github.com/spf13/cast"
@@ -24,6 +26,11 @@ import (
 	"github.com/keboola/keboola-as-code/internal/pkg/utils/errors"
 )
 
+const (
+	KeboolaDataApps   = "keboola.data-apps"
+	KeboolaComponents = "keboola.components"
+)
+
 type Mapper struct {
 	apiHost string
 }
@@ -34,11 +41,11 @@ type mapperDependencies interface {
 
 func NewMapper(d mapperDependencies) *Mapper {
 	return &Mapper{
-		apiHost: d.APIConfig().PublicAddress.String(),
+		apiHost: d.APIConfig().API.PublicURL.String(),
 	}
 }
 
-func (m Mapper) TaskPayload(model *task.Task) (r *Task) {
+func (m Mapper) TaskPayload(model task.Task) (r *Task, err error) {
 	out := &Task{
 		ID:        model.TaskID,
 		Type:      model.Type,
@@ -77,9 +84,15 @@ func (m Mapper) TaskPayload(model *task.Task) (r *Task) {
 				InstanceID: &v,
 			}
 		}
+
+		if v, ok := model.Outputs["configId"].(string); ok {
+			out.Outputs = &TaskOutputs{
+				ConfigID: &v,
+			}
+		}
 	}
 
-	return out
+	return out, nil
 }
 
 func formatTaskURL(apiHost string, k task.Key) string {
@@ -118,7 +131,7 @@ func RepositoryResponse(ctx context.Context, d dependencies.ProjectRequestScope,
 	}
 }
 
-func TemplatesResponse(ctx context.Context, d dependencies.ProjectRequestScope, repo *repository.Repository, templates []repository.TemplateRecord) (out *Templates, err error) {
+func TemplatesResponse(ctx context.Context, d dependencies.ProjectRequestScope, repo *repository.Repository, templates []repository.TemplateRecord, filterBy *string) (out *Templates, err error) {
 	ctx, span := d.Telemetry().Tracer().Start(ctx, "api.server.templates.mapper.TemplatesResponse")
 	defer span.End(&err)
 
@@ -129,7 +142,16 @@ func TemplatesResponse(ctx context.Context, d dependencies.ProjectRequestScope, 
 			continue
 		}
 
-		tmpl := tmpl
+		if filterBy != nil && *filterBy != "" {
+			filterString := *filterBy
+			if !slices.Contains(tmpl.Requirements.Components, filterString) {
+				continue
+			}
+		}
+
+		if !hasRequirements(tmpl, d) {
+			continue
+		}
 		tmplResponse, err := TemplateResponse(ctx, d, &tmpl, out.Repository.Author)
 		if err != nil {
 			return nil, err
@@ -162,7 +184,6 @@ func TemplateResponse(ctx context.Context, d dependencies.ProjectRequestScope, t
 	}
 
 	for _, version := range tmpl.Versions {
-		version := version
 		out.Versions = append(out.Versions, VersionResponse(&version))
 	}
 	return out, nil
@@ -191,7 +212,6 @@ func TemplateDetailResponse(ctx context.Context, d dependencies.ProjectRequestSc
 		Versions:       make([]*Version, 0),
 	}
 	for _, version := range tmpl.Versions {
-		version := version
 		out.Versions = append(out.Versions, VersionResponse(&version))
 	}
 	return out, nil
@@ -279,7 +299,7 @@ func UpgradeInstanceInputsResponse(ctx context.Context, d dependencies.ProjectRe
 	ctx, span := d.Telemetry().Tracer().Start(ctx, "api.server.templates.mapper.UpgradeInstanceInputsResponse")
 	defer span.End(nil)
 
-	stepsGroupsExt := upgrade.ExportInputsValues(d.Logger().InfoWriter(), prjState.State(), branchKey, instance.InstanceID, tmpl.Inputs())
+	stepsGroupsExt := upgrade.ExportInputsValues(ctx, d.Logger().Infof, prjState.State(), branchKey, instance.InstanceID, tmpl.Inputs())
 	return InputsResponse(ctx, d, stepsGroupsExt)
 }
 
@@ -352,7 +372,7 @@ func InputsResponse(ctx context.Context, d dependencies.ProjectRequestScope, ste
 
 	// Together with the inputs definitions, the initial state (initial validation) is generated.
 	// It is primarily intended for the upgrade operation, where the step may be pre-configured.
-	out.InitialState, _, _ = validateInputs(stepsGroups.ToValue(), initialValues)
+	out.InitialState, _, _ = validateInputs(ctx, stepsGroups.ToValue(), initialValues)
 	return out
 }
 
@@ -385,6 +405,9 @@ func InstancesResponse(ctx context.Context, d dependencies.ProjectRequestScope, 
 		return nil, err
 	}
 
+	// Group configurations by instance
+	configs := configurationsByInstance(prjState, branchKey)
+
 	// Map response
 	out = &Instances{Instances: make([]*Instance, 0)}
 	for _, instance := range instances {
@@ -408,6 +431,7 @@ func InstancesResponse(ctx context.Context, d dependencies.ProjectRequestScope, 
 				Date:    instance.Updated.Date.Format(time.RFC3339),
 				TokenID: instance.Updated.TokenID,
 			},
+			Configurations: configs[instance.InstanceID],
 		}
 
 		if instance.MainConfig != nil {
@@ -458,17 +482,6 @@ func InstanceResponse(ctx context.Context, d dependencies.ProjectRequestScope, p
 		}
 	}
 
-	// Map configurations
-	outConfigs := make([]*Config, 0)
-	branchConfigs := prjState.RemoteObjects().ConfigsWithRowsFrom(branchKey)
-	for _, cfg := range search.ConfigsForTemplateInstance(branchConfigs, instanceId) {
-		outConfigs = append(outConfigs, &Config{
-			Name:        cfg.Name,
-			ConfigID:    string(cfg.ID),
-			ComponentID: string(cfg.ComponentID),
-		})
-	}
-
 	// Map response
 	tmplResponse, versionResponse := instanceDetails(ctx, d, instance)
 	out = &InstanceDetail{
@@ -488,7 +501,7 @@ func InstanceResponse(ctx context.Context, d dependencies.ProjectRequestScope, p
 		},
 		TemplateDetail: tmplResponse,
 		VersionDetail:  versionResponse,
-		Configurations: outConfigs,
+		Configurations: instanceConfigurations(prjState, branchKey, instanceId),
 	}
 
 	// Main config
@@ -503,6 +516,38 @@ func InstanceResponse(ctx context.Context, d dependencies.ProjectRequestScope, p
 	}
 
 	return out, nil
+}
+
+func instanceConfigurations(prjState *project.State, branchKey model.BranchKey, instanceId string) []*Config {
+	out := make([]*Config, 0)
+	branchConfigs := prjState.RemoteObjects().ConfigsWithRowsFrom(branchKey)
+	for _, cfg := range search.ConfigsForTemplateInstance(branchConfigs, instanceId) {
+		out = append(out, &Config{
+			Name:        cfg.Name,
+			ConfigID:    string(cfg.ID),
+			ComponentID: string(cfg.ComponentID),
+		})
+	}
+	return out
+}
+
+func configurationsByInstance(prjState *project.State, branchKey model.BranchKey) map[string][]*Config {
+	out := make(map[string][]*Config, 0)
+	branchConfigs := prjState.RemoteObjects().ConfigsWithRowsFrom(branchKey)
+	for instanceID, configs := range search.ConfigsByTemplateInstance(branchConfigs) {
+		for _, cfg := range configs {
+			out[instanceID] = append(out[instanceID], &Config{
+				Name:        cfg.Name,
+				ConfigID:    string(cfg.ID),
+				ComponentID: string(cfg.ComponentID),
+			})
+		}
+		results := out[instanceID]
+		sort.SliceStable(results, func(i, j int) bool {
+			return results[i].Name < results[j].Name
+		})
+	}
+	return out
 }
 
 func templateBaseResponse(ctx context.Context, d dependencies.ProjectRequestScope, tmpl *repository.TemplateRecord, author *Author) (out *TemplateBase, err error) {
@@ -552,4 +597,19 @@ func instanceDetails(ctx context.Context, d dependencies.ProjectRequestScope, in
 	versionResponse := VersionDetailResponse(d, versionRecord, tmpl)
 
 	return tmplResponse, versionResponse
+}
+
+func hasRequirements(tmpl repository.TemplateRecord, d dependencies.ProjectRequestScope) bool {
+	if !tmpl.HasBackend(d.ProjectBackends()) {
+		return false
+	}
+
+	if !tmpl.CheckProjectComponents(d.Components()) {
+		return false
+	}
+
+	if !tmpl.CheckProjectFeatures(d.ProjectFeatures()) {
+		return false
+	}
+	return true
 }

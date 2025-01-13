@@ -1,6 +1,7 @@
 package fixtures
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"runtime"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/keboola/go-client/pkg/keboola"
 	"github.com/keboola/go-utils/pkg/orderedmap"
+	"github.com/stretchr/testify/require"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/env"
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem"
@@ -60,14 +62,15 @@ type Bucket struct {
 }
 
 type Table struct {
-	ID          keboola.TableID `json:"id"`
-	URI         string          `json:"uri"`
-	Name        string          `json:"name"`
-	DisplayName string          `json:"displayName"`
-	PrimaryKey  []string        `json:"primaryKey"`
-	Columns     []string        `json:"columns"`
-	Rows        [][]string      `json:"rows,omitempty"`
-	RowsCount   uint64          `json:"rowsCount,omitempty"`
+	ID          keboola.TableID          `json:"id"`
+	URI         string                   `json:"uri"`
+	Name        string                   `json:"name"`
+	DisplayName string                   `json:"displayName"`
+	PrimaryKey  []string                 `json:"primaryKey"`
+	Definition  *keboola.TableDefinition `json:"definition,omitempty"`
+	Columns     []string                 `json:"columns"`
+	Rows        [][]string               `json:"rows,omitempty"`
+	RowsCount   uint64                   `json:"rowsCount,omitempty"`
 }
 
 type File struct {
@@ -104,13 +107,19 @@ type ConfigRow struct {
 	Content           *orderedmap.OrderedMap `json:"configuration"`
 }
 
+type BackendDefinition struct {
+	Type string `json:"type"`
+}
+
 type StateFile struct {
-	AllBranchesConfigs []string          `json:"allBranchesConfigs" validate:"required"`
-	Branches           []*BranchState    `json:"branches" validate:"required"`
-	Buckets            []*Bucket         `json:"buckets,omitempty"`
-	Sandboxes          []*Sandbox        `json:"sandboxes,omitempty"`
-	Files              []*File           `json:"files,omitempty"`
-	Envs               map[string]string `json:"envs,omitempty"` // additional ENVs
+	Backend              *BackendDefinition `json:"backend,omitempty"`
+	LegacyTransformation bool               `json:"legacyTransformation,omitempty"`
+	AllBranchesConfigs   []string           `json:"allBranchesConfigs" validate:"required"`
+	Branches             []*BranchState     `json:"branches" validate:"required"`
+	Buckets              []*Bucket          `json:"buckets,omitempty"`
+	Sandboxes            []*Sandbox         `json:"sandboxes,omitempty"`
+	Files                []*File            `json:"files,omitempty"`
+	Envs                 map[string]string  `json:"envs,omitempty"` // additional ENVs
 }
 
 // ToAPI maps fixture to model.Branch.
@@ -199,7 +208,9 @@ func MinimalProjectFs(t *testing.T) filesystem.Fs {
 	envs.Set("TEST_KBC_STORAGE_API_HOST", "foo.bar")
 	envs.Set("LOCAL_STATE_MAIN_BRANCH_ID", "123")
 	envs.Set("LOCAL_STATE_GENERIC_CONFIG_ID", "456")
-	testhelper.MustReplaceEnvsDir(fs, `/`, envs)
+	err := testhelper.ReplaceEnvsDir(context.Background(), fs, `/`, envs)
+	require.NoError(t, err)
+
 	return fs
 }
 

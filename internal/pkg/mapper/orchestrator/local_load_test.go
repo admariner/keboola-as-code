@@ -7,8 +7,8 @@ import (
 
 	"github.com/keboola/go-client/pkg/keboola"
 	"github.com/keboola/go-utils/pkg/orderedmap"
-	"github.com/keboola/go-utils/pkg/wildcards"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem"
 	"github.com/keboola/keboola-as-code/internal/pkg/model"
@@ -63,36 +63,36 @@ func TestMapAfterLocalLoad(t *testing.T) {
 			),
 	}
 	for _, file := range files {
-		assert.NoError(t, fs.WriteFile(file))
+		require.NoError(t, fs.WriteFile(context.Background(), file))
 	}
 	logger.Truncate()
 
 	// Load
 	changes := model.NewLocalChanges()
 	changes.AddLoaded(orchestratorConfigState)
-	assert.NoError(t, state.Mapper().AfterLocalOperation(context.Background(), changes))
+	require.NoError(t, state.Mapper().AfterLocalOperation(context.Background(), changes))
 
 	// Logs
 	expectedLogs := `
-DEBUG  Loaded "branch/other/orchestrator/phases/001-phase/phase.json"
-DEBUG  Loaded "branch/other/orchestrator/phases/001-phase/001-task-1/task.json"
-DEBUG  Loaded "branch/other/orchestrator/phases/001-phase/002-task-2/task.json"
-DEBUG  Loaded "branch/other/orchestrator/phases/001-phase/003-task-3/task.json"
-DEBUG  Loaded "branch/other/orchestrator/phases/002-phase-with-deps/phase.json"
-DEBUG  Loaded "branch/other/orchestrator/phases/002-phase-with-deps/001-task-4/task.json"
-DEBUG  Loaded "branch/other/orchestrator/phases/002-phase-with-deps/002-task-5/task.json"
+{"level":"debug","message":"Loaded \"branch/other/orchestrator/phases/001-phase/phase.json\""}
+{"level":"debug","message":"Loaded \"branch/other/orchestrator/phases/001-phase/001-task-1/task.json\""}
+{"level":"debug","message":"Loaded \"branch/other/orchestrator/phases/001-phase/002-task-2/task.json\""}
+{"level":"debug","message":"Loaded \"branch/other/orchestrator/phases/001-phase/003-task-3/task.json\""}
+{"level":"debug","message":"Loaded \"branch/other/orchestrator/phases/002-phase-with-deps/phase.json\""}
+{"level":"debug","message":"Loaded \"branch/other/orchestrator/phases/002-phase-with-deps/001-task-4/task.json\""}
+{"level":"debug","message":"Loaded \"branch/other/orchestrator/phases/002-phase-with-deps/002-task-5/task.json\""}
 `
-	wildcards.Assert(t, strings.TrimLeft(expectedLogs, "\n"), logger.AllMessages(), ``)
+	logger.AssertJSONMessages(t, expectedLogs)
 
 	// Check target configs relation
 	rel1, err := target1.Local.Relations.GetOneByType(model.UsedInOrchestratorRelType)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, orchestratorConfigState.ID, rel1.(*model.UsedInOrchestratorRelation).ConfigID)
 	rel2, err := target2.Local.Relations.GetOneByType(model.UsedInOrchestratorRelType)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, orchestratorConfigState.ID, rel2.(*model.UsedInOrchestratorRelation).ConfigID)
 	rel3, err := target3.Local.Relations.GetOneByType(model.UsedInOrchestratorRelType)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, orchestratorConfigState.ID, rel3.(*model.UsedInOrchestratorRelation).ConfigID)
 
 	// Orchestration
@@ -235,6 +235,7 @@ func TestMapAfterLocalLoadError(t *testing.T) {
 	logger := d.DebugLogger()
 	fs := state.ObjectsRoot()
 	orchestratorConfigState := createLocalLoadFixtures(t, state)
+	ctx := context.Background()
 
 	// Local files
 	phasesDir := state.NamingGenerator().PhasesDir(orchestratorConfigState.Path())
@@ -259,16 +260,16 @@ func TestMapAfterLocalLoadError(t *testing.T) {
 			SetDescription(`task config file`),
 	}
 	for _, file := range files {
-		assert.NoError(t, fs.WriteFile(file))
+		require.NoError(t, fs.WriteFile(ctx, file))
 	}
-	assert.NoError(t, fs.Mkdir(phasesDir+`/002-phase-with-deps`))
+	require.NoError(t, fs.Mkdir(ctx, phasesDir+`/002-phase-with-deps`))
 	logger.Truncate()
 
 	// Load
 	changes := model.NewLocalChanges()
 	changes.AddLoaded(orchestratorConfigState)
 	err := state.Mapper().AfterLocalOperation(context.Background(), changes)
-	assert.Error(t, err)
+	require.Error(t, err)
 
 	// Assert error
 	expectedError := `
@@ -291,6 +292,7 @@ func TestMapAfterLocalLoadDepsCycle(t *testing.T) {
 	logger := d.DebugLogger()
 	fs := state.ObjectsRoot()
 	orchestratorConfigState := createLocalLoadFixtures(t, state)
+	ctx := context.Background()
 	createTargetConfigs(t, state)
 
 	// Local files
@@ -322,7 +324,7 @@ func TestMapAfterLocalLoadDepsCycle(t *testing.T) {
 			SetDescription(`phase config file`),
 	}
 	for _, file := range files {
-		assert.NoError(t, fs.WriteFile(file))
+		require.NoError(t, fs.WriteFile(ctx, file))
 	}
 	logger.Truncate()
 
@@ -330,7 +332,7 @@ func TestMapAfterLocalLoadDepsCycle(t *testing.T) {
 	changes := model.NewLocalChanges()
 	changes.AddLoaded(orchestratorConfigState)
 	err := state.Mapper().AfterLocalOperation(context.Background(), changes)
-	assert.Error(t, err)
+	require.Error(t, err)
 
 	// Assert error
 	expectedError := `

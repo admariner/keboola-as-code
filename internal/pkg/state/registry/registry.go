@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"context"
 	"sync"
 
 	"github.com/keboola/go-utils/pkg/orderedmap"
@@ -43,9 +44,9 @@ func (s *Registry) PathsState() *knownpaths.Paths {
 	return s.paths.Clone()
 }
 
-func (s *Registry) ReloadPathsState() error {
+func (s *Registry) ReloadPathsState(ctx context.Context) error {
 	// Create a new paths state -> all paths are untracked
-	if err := s.paths.Reset(); err != nil {
+	if err := s.paths.Reset(ctx); err != nil {
 		return errors.Errorf(`cannot reload paths state: %w`, err)
 	}
 
@@ -86,7 +87,7 @@ func (s *Registry) All() []ObjectState {
 		return aKey < bKey
 	})
 
-	var out []ObjectState
+	out := make([]ObjectState, 0, len(s.objects.Keys()))
 	for _, key := range s.objects.Keys() {
 		// Get value
 		v, _ := s.objects.Get(key)
@@ -149,6 +150,33 @@ func (s *Registry) Configs() (configs []*ConfigState) {
 	return configs
 }
 
+func (s *Registry) IgnoreConfig(ignoreID string, componentID string) {
+	for _, object := range s.All() {
+		if v, ok := object.(*ConfigState); ok {
+			if v.ID.String() == ignoreID && v.ComponentID.String() == componentID {
+				// ignore configuration
+				v.Ignore = true
+
+				// ignore rows of the configuration
+				for _, configRowState := range s.ConfigRowsFrom(v.ConfigKey) {
+					configRowState.Ignore = true
+				}
+			}
+		}
+	}
+}
+
+func (s *Registry) IgnoredConfigs() (configs []*ConfigState) {
+	for _, object := range s.All() {
+		if v, ok := object.(*ConfigState); ok {
+			if v.Ignore {
+				configs = append(configs, v)
+			}
+		}
+	}
+	return configs
+}
+
 func (s *Registry) ConfigsFrom(branch BranchKey) (configs []*ConfigState) {
 	for _, object := range s.All() {
 		if v, ok := object.(*ConfigState); ok {
@@ -165,6 +193,27 @@ func (s *Registry) ConfigRows() (rows []*ConfigRowState) {
 	for _, object := range s.All() {
 		if v, ok := object.(*ConfigRowState); ok {
 			rows = append(rows, v)
+		}
+	}
+	return rows
+}
+
+func (s *Registry) IgnoreConfigRow(configID, rowID string) {
+	for _, object := range s.All() {
+		if v, ok := object.(*ConfigRowState); ok {
+			if v.ConfigID.String() == configID && v.ID.String() == rowID {
+				v.Ignore = true
+			}
+		}
+	}
+}
+
+func (s *Registry) IgnoredConfigRows() (rows []*ConfigRowState) {
+	for _, object := range s.All() {
+		if v, ok := object.(*ConfigRowState); ok {
+			if v.Ignore {
+				rows = append(rows, v)
+			}
 		}
 	}
 	return rows

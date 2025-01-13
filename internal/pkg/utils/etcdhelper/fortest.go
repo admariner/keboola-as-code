@@ -29,13 +29,13 @@ type testOrBenchmark interface {
 }
 
 // TmpNamespace creates a temporary etcd namespace and registers cleanup after the test.
-func TmpNamespace(t testOrBenchmark) etcdclient.Credentials {
+func TmpNamespace(t testOrBenchmark) etcdclient.Config {
 	return TmpNamespaceFromEnv(t, "UNIT_ETCD_")
 }
 
 // TmpNamespaceFromEnv creates a temporary etcd namespace and registers cleanup after the test.
-// Credentials are read from the provided ENV prefix.
-func TmpNamespaceFromEnv(t testOrBenchmark, envPrefix string) etcdclient.Credentials {
+// Config are read from the provided ENV prefix.
+func TmpNamespaceFromEnv(t testOrBenchmark, envPrefix string) etcdclient.Config {
 	envs, err := env.FromOs()
 	if err != nil {
 		t.Fatalf("cannot get envs: %s", err)
@@ -45,20 +45,19 @@ func TmpNamespaceFromEnv(t testOrBenchmark, envPrefix string) etcdclient.Credent
 		t.Skipf(fmt.Sprintf("etcd test is disabled by %s_ENABLED=false", envPrefix))
 	}
 
-	credentials := etcdclient.Credentials{
-		Endpoint:  envs.Get(envPrefix + "ENDPOINT"),
-		Namespace: idgenerator.EtcdNamespaceForTest(),
-		Username:  envs.Get(envPrefix + "USERNAME"),
-		Password:  envs.Get(envPrefix + "PASSWORD"),
-	}
+	cfg := etcdclient.NewConfig()
+	cfg.Endpoint = envs.Get(envPrefix + "ENDPOINT")
+	cfg.Namespace = idgenerator.EtcdNamespaceForTest()
+	cfg.Username = envs.Get(envPrefix + "USERNAME")
+	cfg.Password = envs.Get(envPrefix + "PASSWORD")
 
-	if credentials.Endpoint == "" {
-		t.Fatalf(`etcd endpoint is not set`)
+	if cfg.Endpoint == "" {
+		t.Fatalf(`etcd endpoint env "%s" is not set`, envPrefix+"ENDPOINT")
 	}
 
 	t.Cleanup(func() {
 		ctx, cancel := context.WithCancel(context.Background())
-		client := clientForTest(t, ctx, credentials)
+		client := clientForTest(t, ctx, cfg)
 		_, err := client.Delete(ctx, "", etcd.WithFromKey())
 		cancel()
 		if err != nil {
@@ -66,20 +65,20 @@ func TmpNamespaceFromEnv(t testOrBenchmark, envPrefix string) etcdclient.Credent
 		}
 	})
 
-	return credentials
+	return cfg
 }
 
-func ClientForTest(t testOrBenchmark, credentials etcdclient.Credentials, dialOpts ...grpc.DialOption) *etcd.Client {
+func ClientForTest(t testOrBenchmark, cfg etcdclient.Config, dialOpts ...grpc.DialOption) *etcd.Client {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(func() {
 		cancel()
 	})
-	return clientForTest(t, ctx, credentials, dialOpts...)
+	return clientForTest(t, ctx, cfg, dialOpts...)
 }
 
-func clientForTest(t testOrBenchmark, ctx context.Context, credentials etcdclient.Credentials, dialOpts ...grpc.DialOption) *etcd.Client {
+func clientForTest(t testOrBenchmark, ctx context.Context, cfg etcdclient.Config, dialOpts ...grpc.DialOption) *etcd.Client {
 	// Normalize namespace
-	credentials.Namespace = strings.Trim(credentials.Namespace, " /") + "/"
+	cfg.Namespace = strings.Trim(cfg.Namespace, " /") + "/"
 
 	// Setup logger
 	var logger *zap.Logger
@@ -87,28 +86,32 @@ func clientForTest(t testOrBenchmark, ctx context.Context, credentials etcdclien
 	// Should be logger enabled?
 	verbose := VerboseTestLogs()
 
-	// Enable logger
-	if verbose {
-		encoder := zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig())
-		logger = zap.New(log.NewCallbackCore(func(entry zapcore.Entry, fields []zapcore.Field) {
-			if entry.Level > log.DebugLevel {
-				bytes, _ := encoder.EncodeEntry(entry, fields)
-				_, _ = os.Stdout.Write(bytes.Bytes())
-			}
-		}))
-	}
+	// Replace default logger
+	// By default only client errors are printed to the test stdout.
+	// Each server error, for example "etcdserver: duplicate key given in txn request",
+	// is also client warning, but these errors are checked in the tests,
+	// so we usually do not need to log them in duplicate from the client.
+	encoder := zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig())
+	logger = zap.New(log.NewCallbackCore(func(entry zapcore.Entry, fields []zapcore.Field) {
+		minLevel := log.ErrorLevel
+		if verbose {
+			minLevel = log.InfoLevel
+		}
+		if entry.Level >= minLevel {
+			bytes, _ := encoder.EncodeEntry(entry, fields)
+			_, _ = os.Stdout.WriteString("ETCD_TEST_CLIENT " + bytes.String() + "\n") // nolint:forbidigo
+		}
+	}))
 
 	// Dial options
 	dialOpts = append(
 		dialOpts,
-		grpc.WithBlock(),                 // wait for the connection
-		grpc.WithReturnConnectionError(), // wait for the connection error
 		grpc.WithConnectParams(grpc.ConnectParams{
 			Backoff: backoff.Config{
 				BaseDelay:  100 * time.Millisecond,
 				Multiplier: 1.5,
 				Jitter:     0.2,
-				MaxDelay:   15 * time.Second,
+				MaxDelay:   5 * time.Second,
 			},
 		}),
 	)
@@ -116,12 +119,12 @@ func clientForTest(t testOrBenchmark, ctx context.Context, credentials etcdclien
 	// Create etcd client
 	etcdClient, err := etcd.New(etcd.Config{
 		Context:              ctx,
-		Endpoints:            []string{credentials.Endpoint},
-		DialTimeout:          10 * time.Second,
+		Endpoints:            []string{cfg.Endpoint},
+		DialTimeout:          15 * time.Second,
 		DialKeepAliveTimeout: 5 * time.Second,
 		DialKeepAliveTime:    10 * time.Second,
-		Username:             credentials.Username, // optional
-		Password:             credentials.Password, // optional
+		Username:             cfg.Username, // optional
+		Password:             cfg.Password, // optional
 		Logger:               logger,
 		DialOptions:          dialOpts,
 	})
@@ -130,11 +133,11 @@ func clientForTest(t testOrBenchmark, ctx context.Context, credentials etcdclien
 	}
 
 	// Use namespace
-	etcdclient.UseNamespace(etcdClient, credentials.Namespace)
+	etcdclient.UseNamespace(etcdClient, cfg.Namespace)
 
 	// Add operations logger
 	if verbose {
-		etcdClient.KV = etcdlogger.KVLogWrapper(etcdClient.KV, os.Stdout)
+		etcdClient.KV = etcdlogger.KVLogWrapper(etcdClient.KV, os.Stdout) // nolint:forbidigo
 	}
 
 	return etcdClient

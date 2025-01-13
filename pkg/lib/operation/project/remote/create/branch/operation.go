@@ -2,7 +2,6 @@ package branch
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/keboola/go-client/pkg/keboola"
 
@@ -17,7 +16,7 @@ type Options struct {
 }
 
 type dependencies interface {
-	KeboolaProjectAPI() *keboola.API
+	KeboolaProjectAPI() *keboola.AuthorizedAPI
 	Logger() log.Logger
 	Telemetry() telemetry.Telemetry
 }
@@ -34,6 +33,6 @@ func Run(ctx context.Context, o Options, d dependencies) (branch *keboola.Branch
 		return nil, errors.Errorf(`cannot create branch: %w`, err)
 	}
 
-	logger.Info(fmt.Sprintf(`Created new branch "%s".`, branch.Name))
+	logger.Infof(ctx, `Created new branch "%s".`, branch.Name)
 	return branch, nil
 }

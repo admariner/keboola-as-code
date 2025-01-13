@@ -17,55 +17,79 @@ const (
 	gracefulShutdownTimeout = 30 * time.Second
 )
 
+type HTTPServer struct {
+	*http.Server
+	logger        log.Logger
+	proc          *servicectx.Process
+	listenAddress string
+}
+
 type dependencies interface {
 	Logger() log.Logger
 	Process() *servicectx.Process
 	Telemetry() telemetry.Telemetry
 }
 
-// Start HTTP server.
-func Start(d dependencies, cfg Config) error {
-	logger, tel := d.Logger(), d.Telemetry()
+// New creates new instance of HTTP server that is not running yet.
+func New(ctx context.Context, d dependencies, cfg Config) *HTTPServer {
+	server := &HTTPServer{
+		logger:        d.Logger(),
+		proc:          d.Process(),
+		listenAddress: cfg.ListenAddress,
+	}
+	server.logger.Infof(ctx, `starting HTTP server on %q`, server.listenAddress)
 
 	// Create server components
-	com := newComponents(cfg, logger)
+	com := newComponents(cfg, server.logger)
 
 	// Register middlewares
 	middlewareCfg := middleware.NewConfig(cfg.MiddlewareOptions...)
 	com.Muxer.Use(middleware.OpenTelemetryExtractRoute())
+	tel := d.Telemetry()
 	handler := middleware.Wrap(
 		com.Muxer,
 		middleware.ContextTimout(requestTimeout),
 		middleware.RequestInfo(),
 		middleware.Filter(middlewareCfg),
-		middleware.Logger(logger),
+		middleware.Logger(server.logger),
 		middleware.OpenTelemetry(tel.TracerProvider(), tel.MeterProvider(), middlewareCfg),
+		middleware.OpenTelemetryApdex(tel.MeterProvider()),
 	)
 	// Mount endpoints
 	cfg.Mount(com)
-	logger.Infof("mounted HTTP endpoints")
+	server.logger.Infof(ctx, "mounted HTTP endpoints")
 
-	// Start HTTP server
-	srv := &http.Server{Addr: cfg.ListenAddress, Handler: handler, ReadHeaderTimeout: readHeaderTimeout}
-	proc := d.Process()
-	proc.Add(func(ctx context.Context, shutdown servicectx.ShutdownFn) {
-		// Start HTTP server in a separate goroutine.
-		logger.Infof("HTTP server listening on %q", cfg.ListenAddress)
-		shutdown(srv.ListenAndServe())
+	// Prepare HTTP server
+	server.Server = &http.Server{
+		Addr:              server.listenAddress,
+		Handler:           handler,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ErrorLog:          log.NewStdErrorLogger(d.Logger().WithComponent("http-server")),
+	}
+	return server
+}
+
+// Start HTTP server.
+func (h *HTTPServer) Start(ctx context.Context) error {
+	// Start HTTP server in a separate goroutine.
+	h.proc.Add(func(shutdown servicectx.ShutdownFn) {
+		h.logger.Infof(ctx, "started HTTP server on %q", h.listenAddress)
+		serverErr := h.ListenAndServe() // ListenAndServe blocks while the server is running
+		shutdown(context.WithoutCancel(ctx), serverErr)
 	})
 
 	// Register graceful shutdown
-	proc.OnShutdown(func() {
-		logger.Infof("shutting down HTTP server at %q", cfg.ListenAddress)
-
+	h.proc.OnShutdown(func(ctx context.Context) {
 		// Shutdown gracefully with a timeout.
-		ctx, cancel := context.WithTimeout(context.Background(), gracefulShutdownTimeout)
+		ctx, cancel := context.WithTimeout(ctx, gracefulShutdownTimeout)
 		defer cancel()
 
-		if err := srv.Shutdown(ctx); err != nil {
-			logger.Errorf(`HTTP server shutdown error: %s`, err)
+		h.logger.Infof(ctx, "shutting down HTTP server at %q", h.listenAddress)
+
+		if err := h.Shutdown(ctx); err != nil {
+			h.logger.Errorf(ctx, `HTTP server shutdown error: %s`, err)
 		}
-		logger.Info("HTTP server shutdown finished")
+		h.logger.Info(ctx, "HTTP server shutdown finished")
 	})
 
 	return nil

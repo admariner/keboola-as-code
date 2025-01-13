@@ -2,21 +2,25 @@ package task
 
 import (
 	"context"
-	"fmt"
+	"reflect"
 	"runtime/debug"
+	"sort"
 	"sync"
 	"time"
 
-	"github.com/benbjohnson/clock"
+	"github.com/jonboulle/clockwork"
+	"github.com/spf13/cast"
 	etcd "go.etcd.io/etcd/client/v3"
-	"go.etcd.io/etcd/client/v3/concurrency"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/atomic"
 
-	"github.com/keboola/keboola-as-code/internal/pkg/encoding/json"
 	"github.com/keboola/keboola-as-code/internal/pkg/idgenerator"
 	"github.com/keboola/keboola-as-code/internal/pkg/log"
+	"github.com/keboola/keboola-as-code/internal/pkg/service/common/ctxattr"
+	"github.com/keboola/keboola-as-code/internal/pkg/service/common/distribution"
+	svcerrors "github.com/keboola/keboola-as-code/internal/pkg/service/common/errors"
 	"github.com/keboola/keboola-as-code/internal/pkg/service/common/etcdop"
 	"github.com/keboola/keboola-as-code/internal/pkg/service/common/etcdop/op"
 	"github.com/keboola/keboola-as-code/internal/pkg/service/common/etcdop/serde"
@@ -39,93 +43,104 @@ type runTaskFn func() (Result, error)
 // Node represents a cluster Worker node on which tasks are run.
 // See comments in the StartTask method.
 type Node struct {
-	tracer telemetry.Tracer
-	meters *meters
+	tracer  telemetry.Tracer
+	metrics *metrics
 
-	clock  clock.Clock
+	clock  clockwork.Clock
 	logger log.Logger
 	client *etcd.Client
 
-	tasksCtx context.Context
-	tasksWg  *sync.WaitGroup
+	tasksWg *sync.WaitGroup
 
-	sessionLock *sync.RWMutex
-	session     *concurrency.Session
+	session *etcdop.Session
 
 	nodeID     string
-	config     nodeConfig
+	config     NodeConfig
 	tasksCount *atomic.Int64
 
 	taskEtcdPrefix etcdop.PrefixT[Task]
 	taskLocksMutex *sync.Mutex
 	taskLocks      map[string]bool
+
+	exceptionIDPrefix string
 }
 
 type dependencies interface {
 	Telemetry() telemetry.Telemetry
-	Clock() clock.Clock
+	Clock() clockwork.Clock
 	Logger() log.Logger
 	Process() *servicectx.Process
 	EtcdClient() *etcd.Client
 	EtcdSerde() *serde.Serde
+	DistributionNode() *distribution.Node
 }
 
-func NewNode(d dependencies, opts ...NodeOption) (*Node, error) {
-	// Apply options
-	c := defaultNodeConfig()
-	for _, o := range opts {
-		o(&c)
+func NewNode(nodeID string, exceptionIDPrefix string, d dependencies, cfg NodeConfig) (*Node, error) {
+	// Validate
+	if nodeID == "" {
+		panic(errors.New("task.Node: node ID cannot be empty"))
+	}
+
+	// Start API background tasks cleaner
+	if cfg.CleanupEnabled {
+		if err := StartCleaner(d, cfg.CleanupInterval); err != nil {
+			return nil, err
+		}
 	}
 
 	proc := d.Process()
 
-	taskPrefix := etcdop.NewTypedPrefix[Task](etcdop.NewPrefix(c.taskEtcdPrefix), d.EtcdSerde())
 	n := &Node{
-		tracer:         d.Telemetry().Tracer(),
-		meters:         newMeters(d.Telemetry().Meter()),
-		clock:          d.Clock(),
-		logger:         d.Logger().AddPrefix("[task]"),
-		client:         d.EtcdClient(),
-		nodeID:         proc.UniqueID(),
-		config:         c,
-		tasksCount:     atomic.NewInt64(0),
-		taskEtcdPrefix: taskPrefix,
-		taskLocksMutex: &sync.Mutex{},
-		taskLocks:      make(map[string]bool),
+		tracer:            d.Telemetry().Tracer(),
+		metrics:           newMetrics(d.Telemetry().Meter()),
+		clock:             d.Clock(),
+		logger:            d.Logger().WithComponent("task"),
+		client:            d.EtcdClient(),
+		nodeID:            nodeID,
+		config:            cfg,
+		tasksCount:        atomic.NewInt64(0),
+		taskEtcdPrefix:    newTaskPrefix(d.EtcdSerde()),
+		taskLocksMutex:    &sync.Mutex{},
+		taskLocks:         make(map[string]bool),
+		exceptionIDPrefix: exceptionIDPrefix,
 	}
 
 	// Graceful shutdown
-	var cancelTasks context.CancelFunc
+	bgContext := ctxattr.ContextWith(context.Background(), attribute.String("node", n.nodeID)) // nolint: contextcheck
 	n.tasksWg = &sync.WaitGroup{}
-	n.tasksCtx, cancelTasks = context.WithCancel(context.Background())
 	sessionWg := &sync.WaitGroup{}
-	sessionCtx, cancelSession := context.WithCancel(context.Background())
-	proc.OnShutdown(func() {
-		n.logger.Info("received shutdown request")
+	sessionCtx, cancelSession := context.WithCancel(bgContext)
+	proc.OnShutdown(func(ctx context.Context) {
+		ctx = ctxattr.ContextWith(ctx, attribute.String("node", n.nodeID))
+		n.logger.Info(ctx, "received shutdown request")
 		if c := n.tasksCount.Load(); c > 0 {
-			n.logger.Infof(`waiting for "%d" tasks to be finished`, c)
+			n.logger.Infof(ctx, `waiting for "%d" tasks to be finished`, c)
 		}
-		cancelTasks()
 		n.tasksWg.Wait()
 		cancelSession()
 		sessionWg.Wait()
-		n.logger.Info("shutdown done")
+		n.logger.Info(ctx, "shutdown done")
 	})
+
+	// Log node ID
+	n.logger.Infof(bgContext, `node ID "%s"`, n.nodeID)
 
 	// Create etcd session
-	n.sessionLock = &sync.RWMutex{}
-	sessionInit := etcdop.ResistantSession(sessionCtx, sessionWg, n.logger, n.client, c.ttlSeconds, func(session *concurrency.Session) error {
-		n.sessionLock.Lock()
+	session, errCh := etcdop.
+		NewSessionBuilder().
+		WithTTLSeconds(cfg.TTLSeconds).
+		Start(sessionCtx, sessionWg, n.logger, n.client)
+	if err := <-errCh; err == nil {
 		n.session = session
-		n.sessionLock.Unlock()
-		return nil
-	})
-
-	if err := <-sessionInit; err != nil {
+	} else {
 		return nil, err
 	}
 
 	return n, nil
+}
+
+func (n *Node) GetTask(k Key) op.WithResult[Task] {
+	return n.taskEtcdPrefix.Key(k.String()).GetOrErr(n.client)
 }
 
 func (n *Node) TasksCount() int64 {
@@ -133,15 +148,15 @@ func (n *Node) TasksCount() int64 {
 }
 
 // StartTaskOrErr in background, the task run at most once, it is provided by local lock and etcd transaction.
-func (n *Node) StartTaskOrErr(cfg Config) error {
-	_, err := n.StartTask(cfg)
+func (n *Node) StartTaskOrErr(ctx context.Context, cfg Config) error {
+	_, err := n.StartTask(ctx, cfg)
 	return err
 }
 
 // StartTask in background, the task run at most once, it is provided by local lock and etcd transaction.
-func (n *Node) StartTask(cfg Config) (t *Task, err error) {
+func (n *Node) StartTask(ctx context.Context, cfg Config) (t Task, err error) {
 	// Prepare task, acquire lock
-	task, fn, err := n.prepareTask(cfg)
+	task, fn, err := n.prepareTask(ctx, cfg)
 
 	// Run task in background, if it is prepared
 	if fn != nil {
@@ -155,22 +170,22 @@ func (n *Node) StartTask(cfg Config) (t *Task, err error) {
 }
 
 // RunTaskOrErr in foreground, the task run at most once, it is provided by local lock and etcd transaction.
-func (n *Node) RunTaskOrErr(cfg Config) error {
-	_, err := n.RunTask(cfg)
+func (n *Node) RunTaskOrErr(ctx context.Context, cfg Config) error {
+	_, err := n.RunTask(ctx, cfg)
 	return err
 }
 
 // RunTask in foreground, the task run at most once, it is provided by local lock and etcd transaction.
-func (n *Node) RunTask(cfg Config) (t *Task, err error) {
+func (n *Node) RunTask(ctx context.Context, cfg Config) (t Task, err error) {
 	// Prepare task, acquire lock, handle error during prepare phase
-	task, fn, err := n.prepareTask(cfg)
+	task, fn, err := n.prepareTask(ctx, cfg)
 	if err != nil {
-		return nil, err
+		return Task{}, err
 	}
 
 	// No-op, for example a task with the same lock is already running
 	if fn == nil {
-		return nil, nil
+		return Task{}, nil
 	}
 
 	// Run task in foreground, handle error during task execution
@@ -183,7 +198,7 @@ func (n *Node) RunTask(cfg Config) (t *Task, err error) {
 	return task, result.Error
 }
 
-func (n *Node) prepareTask(cfg Config) (t *Task, fn runTaskFn, err error) {
+func (n *Node) prepareTask(ctx context.Context, cfg Config) (t Task, fn runTaskFn, err error) {
 	if err := cfg.Validate(); err != nil {
 		panic(err)
 	}
@@ -203,49 +218,54 @@ func (n *Node) prepareTask(cfg Config) (t *Task, fn runTaskFn, err error) {
 	// so locally can be determined that the task is already running.
 	ok, unlock := n.lockTaskLocally(lock.Key())
 	if !ok {
-		return nil, nil, nil
+		return Task{}, nil, TaskLockError{errors.Errorf("task already running %q", taskKey)}
 	}
 
 	// Create task model
 	task := Task{Key: taskKey, Type: cfg.Type, CreatedAt: createdAt, Node: n.nodeID, Lock: lock}
 
 	// Get session
-	n.sessionLock.RLock()
-	session := n.session
-	n.sessionLock.RUnlock()
+	session, err := n.session.Session()
+	if err != nil {
+		return Task{}, nil, err
+	}
+
+	ctx = ctxattr.ContextWith(ctx, attribute.String("task", task.Key.String()), attribute.String("node", n.nodeID))
 
 	// Create task and lock in etcd
 	// Atomicity: If the lock key already exists, the then the transaction fails and task is ignored.
 	// Resistance to outages: If the Worker node fails, the lock is released automatically by the lease, after the session TTL seconds.
-	logger := n.logger.AddPrefix(fmt.Sprintf("[%s]", taskKey.String()))
 	createTaskOp := op.MergeToTxn(
-		n.taskEtcdPrefix.Key(taskKey.String()).Put(task),
-		lock.PutIfNotExists(task.Node, etcd.WithLease(session.Lease())),
+		n.client,
+		n.taskEtcdPrefix.Key(taskKey.String()).Put(n.client, task),
+		lock.PutIfNotExists(n.client, task.Node, etcd.WithLease(session.Lease())),
 	)
-	if resp, err := createTaskOp.Do(n.tasksCtx, n.client); err != nil {
+	if r := createTaskOp.Do(ctx); r.Err() != nil { // nolint: contextcheck
 		unlock()
-		return nil, nil, errors.Errorf(`cannot start task "%s": %s`, taskKey, err)
-	} else if !resp.Succeeded {
+		return Task{}, nil, errors.Errorf(`cannot start task "%s": %s`, taskKey, r.Err())
+	} else if !r.Succeeded() {
 		unlock()
-		logger.Infof(`task ignored, the lock "%s" is in use`, lock.Key())
-		return nil, nil, nil
+		n.logger.Infof(ctx, `task ignored, the lock "%s" is in use`, lock.Key())
+		return Task{}, nil, nil
 	}
 
 	// Run operation in the background
-	logger.Infof(`started task`)
-	logger.Debugf(`lock acquired "%s"`, task.Lock.Key())
+	n.logger.Infof(ctx, `started task`)
+	n.logger.Debugf(ctx, `lock acquired "%s"`, task.Lock.Key())
 
 	// Return function, task is prepared, lock is locked, it can be run in background/foreground.
 	fn = func() (Result, error) {
 		defer unlock()
-		return n.runTask(logger, task, cfg)
+		return n.runTask(n.logger, task, cfg)
 	}
-	return &task, fn, nil
+	return task, fn, nil
 }
 
 func (n *Node) runTask(logger log.Logger, task Task, cfg Config) (result Result, err error) {
 	// Create task context
 	ctx, cancel := cfg.Context()
+	ctx = ctxattr.ContextWith(ctx, attribute.String("task", task.Key.String()), attribute.String("node", n.nodeID))
+
 	defer cancel()
 	if _, ok := ctx.Deadline(); !ok {
 		panic(errors.Errorf(`task "%s" context must have a deadline`, cfg.Type))
@@ -253,7 +273,7 @@ func (n *Node) runTask(logger log.Logger, task Task, cfg Config) (result Result,
 
 	// Setup telemetry
 	ctx, span := n.tracer.Start(ctx, spanName, trace.WithAttributes(spanStartAttrs(&task)...))
-	n.meters.running.Add(ctx, 1, metric.WithAttributes(meterStartAttrs(&task)...))
+	n.metrics.running.Add(ctx, 1, metric.WithAttributes(meterStartAttrs(&task)...))
 
 	// Process results in defer to catch panic
 	defer span.End(&result.Error)
@@ -264,7 +284,7 @@ func (n *Node) runTask(logger log.Logger, task Task, cfg Config) (result Result,
 		defer func() {
 			if panicErr := recover(); panicErr != nil {
 				err := errors.Errorf("panic: %s, stacktrace: %s", panicErr, string(debug.Stack()))
-				logger.Errorf(`task panic: %s`, err)
+				logger.Errorf(ctx, `task panic: %s`, err)
 				if result.Error == nil {
 					result = ErrResult(err)
 				}
@@ -283,47 +303,90 @@ func (n *Node) runTask(logger log.Logger, task Task, cfg Config) (result Result,
 	task.FinishedAt = &finishedAt
 	task.Duration = &duration
 	task.Outputs = result.Outputs
+
+	// Use task outputs in log message and telemetry
+	var attrs []attribute.KeyValue
+	for k, v := range task.Outputs {
+		// Skip nil values
+		if v := reflect.ValueOf(v); !v.IsValid() || (v.Kind() == reflect.Pointer && v.IsZero()) {
+			continue
+		}
+		// Convert value to a string if possible
+		if str, err := cast.ToStringE(v); err == nil {
+			attrs = append(attrs, attribute.String("result_outputs."+k, str))
+		}
+	}
+	sort.SliceStable(attrs, func(i, j int) bool {
+		return attrs[i].Key < attrs[j].Key
+	})
+
+	// Set task entity result
 	if result.Error == nil {
 		task.Result = result.Result
-		if len(task.Outputs) > 0 {
-			logger.Infof(`task succeeded (%s): %s outputs: %s`, duration, task.Result, json.MustEncodeString(task.Outputs, false))
-		} else {
-			logger.Infof(`task succeeded (%s): %s`, duration, task.Result)
-		}
 	} else {
 		task.Error = result.Error.Error()
-		if len(task.Outputs) > 0 {
-			logger.Warnf(`task failed (%s): %s outputs: %s`, duration, errors.Format(result.Error, errors.FormatWithStack()), json.MustEncodeString(task.Outputs, false))
+		task.UserError = &Error{}
+
+		var errWithName svcerrors.WithName
+		if errors.As(result.Error, &errWithName) {
+			task.UserError.Name = errWithName.ErrorName()
 		} else {
-			logger.Warnf(`task failed (%s): %s`, duration, errors.Format(result.Error, errors.FormatWithStack()))
+			task.UserError.Name = "unknownError"
 		}
+
+		var errWithUserMessage svcerrors.WithUserMessage
+		if errors.As(result.Error, &errWithUserMessage) {
+			task.UserError.Message = errWithUserMessage.ErrorUserMessage()
+		} else {
+			task.UserError.Message = "Unknown error"
+		}
+
+		var errWithExceptionID svcerrors.WithExceptionID
+		if errors.As(result.Error, &errWithExceptionID) {
+			task.UserError.ExceptionID = errWithExceptionID.ErrorExceptionID()
+		} else {
+			task.UserError.ExceptionID = n.exceptionIDPrefix + idgenerator.TaskExceptionID()
+		}
+	}
+
+	// Update telemetry
+	span.SetAttributes(spanEndAttrs(&task, result)...)
+	span.SetAttributes(attrs...)
+
+	// Log task result
+	logger = logger.With(attrs...)
+	if result.Error == nil {
+		logger.Infof(ctx, `task succeeded (%s): %s`, duration, task.Result)
+	} else {
+		logger.Warnf(ctx, `task failed (%s): %s`, duration, errors.Format(result.Error, errors.FormatWithStack()))
 	}
 
 	// Create context for task finalization, the original context could have timed out.
 	// If release of the lock takes longer than the ttl, lease is expired anyway.
-	ctx, finalizationCancel := context.WithTimeout(context.Background(), time.Duration(n.config.ttlSeconds)*time.Second)
+	finalizationCtx, finalizationCancel := context.WithTimeout(context.Background(), time.Duration(n.config.TTLSeconds)*time.Second)
 	defer finalizationCancel()
 
 	// Update telemetry
-	span.SetAttributes(spanEndAttrs(&task, result)...)
-	n.meters.running.Add(ctx, -1, metric.WithAttributes(meterStartAttrs(&task)...))
-	n.meters.duration.Record(ctx, durationMs, metric.WithAttributes(meterEndAttrs(&task, result)...))
+	n.metrics.running.Add(finalizationCtx, -1, metric.WithAttributes(meterStartAttrs(&task)...))
+	n.metrics.duration.Record(finalizationCtx, durationMs, metric.WithAttributes(meterEndAttrs(&task, result)...))
 
 	// Update task and release lock in etcd
 	finalizeTaskOp := op.MergeToTxn(
-		n.taskEtcdPrefix.Key(task.Key.String()).Put(task),
-		task.Lock.DeleteIfExists(),
+		n.client,
+		n.taskEtcdPrefix.Key(task.Key.String()).Put(n.client, task),
+		task.Lock.DeleteIfExists(n.client),
 	)
-	if resp, err := finalizeTaskOp.Do(ctx, n.client); err != nil {
+	r := finalizeTaskOp.Do(finalizationCtx)
+	if err := r.Err(); err != nil {
 		err = errors.Errorf(`cannot update task and release lock: %w`, err)
-		logger.Error(err)
+		logger.Error(ctx, err.Error())
 		return result, err
-	} else if !resp.Succeeded {
+	} else if !r.Succeeded() {
 		err = errors.Errorf(`cannot release task lock "%s", not found`, task.Lock.Key())
-		logger.Error(err)
+		logger.Error(ctx, err.Error())
 		return result, err
 	}
-	logger.Debugf(`lock released "%s"`, task.Lock.Key())
+	logger.Debugf(ctx, `lock released "%s"`, task.Lock.Key())
 
 	return result, nil
 }
@@ -348,4 +411,8 @@ func (n *Node) lockTaskLocally(lock string) (ok bool, unlock func()) {
 		n.tasksCount.Dec()
 		n.tasksWg.Done()
 	}
+}
+
+func newTaskPrefix(s *serde.Serde) etcdop.PrefixT[Task] {
+	return etcdop.NewTypedPrefix[Task](etcdop.NewPrefix(EtcdPrefix), s)
 }

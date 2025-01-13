@@ -1,10 +1,12 @@
 package jsonnetfiles_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/keboola/go-utils/pkg/orderedmap"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/keboola/keboola-as-code/internal/pkg/encoding/jsonnet"
 	"github.com/keboola/keboola-as-code/internal/pkg/filesystem"
@@ -17,6 +19,7 @@ func TestJsonnetMapper_LoadLocalFile(t *testing.T) {
 	// Variables
 	jsonnetCtx := jsonnet.NewContext()
 	jsonnetCtx.ExtVar("myKey", "bar")
+	ctx := context.Background()
 
 	// Create state
 	state := createStateWithMapper(t, jsonnetCtx)
@@ -24,7 +27,7 @@ func TestJsonnetMapper_LoadLocalFile(t *testing.T) {
 	// Write Jsonnet file with a variable
 	fs := state.ObjectsRoot()
 	jsonnetContent := `{ foo: std.extVar("myKey")}`
-	assert.NoError(t, fs.WriteFile(filesystem.NewRawFile(`my/dir/file.jsonnet`, jsonnetContent)))
+	require.NoError(t, fs.WriteFile(ctx, filesystem.NewRawFile(`my/dir/file.jsonnet`, jsonnetContent)))
 
 	// Create file loader
 	fileLoader := state.Mapper().NewFileLoader(fs)
@@ -32,8 +35,8 @@ func TestJsonnetMapper_LoadLocalFile(t *testing.T) {
 	// Load file
 	fileDef := filesystem.NewFileDef(`my/dir/file.json`)
 	fileDef.AddTag(model.FileTypeJSON)
-	jsonFile, err := fileLoader.ReadJSONFile(fileDef)
-	assert.NoError(t, err)
+	jsonFile, err := fileLoader.ReadJSONFile(ctx, fileDef)
+	require.NoError(t, err)
 
 	// Jsonnet file is loaded and converted to a Json file
 	assert.Equal(t, `my/dir/file.jsonnet`, jsonFile.Path())
